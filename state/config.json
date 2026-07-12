@@ -1,0 +1,141 @@
+{
+  "version": "1.1.0",
+  "updated_at": "2026-07-11",
+  "trading": {
+    "timeframe": "15m",
+    "whitelist_symbols": [
+      "BTCUSDT",
+      "ETHUSDT"
+    ],
+    "margin_mode": "isolated",
+    "default_leverage_main": 5,
+    "max_leverage_limit": 10,
+    "max_concurrent_positions": 3,
+    "emergency_stop": false,
+    "demo_mode": true
+  },
+  "risk": {
+    "max_loss_percent_per_trade": 2.0,
+    "min_reward_risk_ratio": 1.5,
+    "daily_max_loss_trades": 3,
+    "sl_buffer_percent": 0.5,
+    "atr_multiplier": 2.0,
+    "time_stop_hours": 2,
+    "slippage_bps": 5,
+    "taker_fee_rate": 0.00055,
+    "tp_partial_ratios": [
+      0.30,
+      0.30,
+      0.40
+    ],
+    "tp_partial_rr": [
+      1.0,
+      1.5,
+      2.5
+    ]
+  },
+  "strategy_a": {
+    "name": "EMA20_BREAKOUT",
+    "enabled": true,
+    "description": "趋势市右侧突破策略：EMA20 + 同侧确认 + 量价共振 + RSI 过滤",
+    "ema_period": 20,
+    "kline_count_for_confirmation": 2,
+    "volume_ratio_threshold": 0.7,
+    "atr_period": 14,
+    "rsi_period": 14,
+    "rsi_overbought": 65,
+    "rsi_oversold": 35,
+    "_comment": "策略 A 的核心信号已经调到临界值（vol_ratio=0.7）。当前卡点在 ema_turning_up 斜率转正条件，这是趋势市策略的本意。"
+  },
+  "strategy_b": {
+    "name": "BB_RSI_REVERSION",
+    "enabled": true,
+    "description": "震荡市左侧反转策略：BB 触轨 + RSI 极值 + 反转 K 线",
+    "bb_period": 20,
+    "bb_std": 1.4,
+    "rsi_period": 14,
+    "rsi_overbought": 60,
+    "rsi_oversold": 40,
+    "_comment": "策略 B 的阈值已放宽到合理水平。信号未出是因为 close 在 BB 内部，未触轨（这是市场事实，不是策略问题）。"
+  },
+  "strategy_c": {
+    "name": "VOLATILITY_BREAKOUT",
+    "enabled": true,
+    "description": "波动率盘整后爆发策略：BBW 收缩 + 突破 + 量能放大",
+    "bbw_period": 20,
+    "bbw_squeeze_threshold": 0.04,
+    "breakout_buffer": 0.001,
+    "volume_multiplier": 0.5,
+    "rsi_period": 14,
+    "rsi_neutral_low": 30,
+    "rsi_neutral_high": 70,
+    "_comment": "策略 C 大幅放宽：volume_multiplier=0.5, breakout_buffer=0.001, RSI 中性区扩展到 [30, 70]。BBW 0.0023 远低于阈值 0.04。下一根 K 线如出现突破 + 量比>=0.5 即可触发。"
+  },
+  "strategy_d": {
+    "name": "FUNDING_RATE_REVERSAL",
+    "enabled": true,
+    "description": "资金费率极端回归策略：funding 极值 + RSI 反向确认",
+    "funding_extreme_threshold": 0.0001,
+    "funding_history_lookback": 8,
+    "rsi_period": 14,
+    "rsi_overbought": 70,
+    "rsi_oversold": 30,
+    "_comment": "策略 D 等待 funding 极端事件。当前 BTC funding 0.0056%，远低于 0.05% 阈值。是罕见事件策略。"
+  },
+  "leverage_matrix": {
+    "BTC": {
+      "min_leverage": 5,
+      "max_leverage": 10,
+      "hard_ceiling": 3,
+      "atr_low": 80,
+      "atr_high": 250,
+      "category": "mainstream"
+    },
+    "ETH": {
+      "min_leverage": 5,
+      "max_leverage": 10,
+      "hard_ceiling": 3,
+      "atr_low": 5,
+      "atr_high": 15,
+      "category": "mainstream"
+    },
+    "altcoin_top50": {
+      "min_leverage": 3,
+      "max_leverage": 5,
+      "hard_ceiling": 1,
+      "category": "high_cap_alt"
+    },
+    "high_volatility": {
+      "min_leverage": 0,
+      "max_leverage": 0,
+      "note": "禁止使用杠杆，仅现货或放弃"
+    }
+  },
+  "blacklist": {
+    "min_24h_volume_usdt": 50000000,
+    "max_funding_rate_abs": 0.001,
+    "exclude_under_platform_review": true,
+    "refresh_interval_hours": 4
+  },
+  "audit": {
+    "max_consecutive_losses": 3,
+    "lockout_duration_minutes": 30,
+    "fee_to_profit_ratio_threshold": 0.30,
+    "enable_meltdown_lock": true
+  },
+  "openclaw": {
+    "heartbeat_interval_minutes": 30,
+    "trade_on_quarter": true,
+    "quarterly_minutes": [
+      0,
+      15,
+      30,
+      45
+    ]
+  },
+  "notifier": {
+    "enabled": true,
+    "min_interval_sec": 1,
+    "daily_summary_hour_utc": 15
+  }
+}

@@ -1,0 +1,55 @@
+# ─── 凭据（绝对不入版本控制） ─────────────────────────
+.env
+.env.*
+docs/KEY.md
+docs/KEY.md.*
+!docs/KEY.md.template
+
+# ─── 密钥本地缓存 ─────────────────────────────────────
+*.pem
+*.key
+id_rsa*
+
+# ─── Python 缓存 ─────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# ─── 状态（账户级数据，分享出去无意义）──────────────
+# 跟踪 state/config.json（策略/风控参数，可版本化），
+# 排除含 posId / 仓位历史 / 实时状态的本地文件
+state/*
+!state/config.json
+!state/.gitkeep
+
+# ─── 日志（按需保留 .gitkeep） ───────────────────────
+logs/*.log
+logs/*.csv
+logs/trades/*.csv
+!logs/.gitkeep
+
+# ─── 临时与备份文件 ─────────────────────────────────
+*.tmp
+*.swp
+*.bak
+*.bak-*
+.DS_Store
+Thumbs.db
+
+# ─── IDE ─────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+
+# ─── 测试与备份 ─────────────────────────────────────
+/tmp/okx-*/
+.cache/

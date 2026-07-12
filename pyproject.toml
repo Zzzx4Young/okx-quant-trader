@@ -1,0 +1,104 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "okx-trading"
+version = "1.1.0"
+description = "OKX API v5 量化交易系统（EMA20 策略 + ATR 止损 + 多层风控）"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Proprietary" }
+authors = [
+    { name = "Nixil" },
+]
+keywords = ["okx", "trading", "quant", "crypto", "automation"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "requests>=2.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "mypy>=1.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+# 安装后可用：okx status / okx run / okx stop 等
+okx = "okx.code.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["okx*"]
+exclude = ["tests*", "scripts*", "docs*", "prompts*"]
+
+[tool.setuptools.package-data]
+"okx" = ["state/*.json", "../state/*.json"]
+
+# ──────── pytest ────────
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--tb=short",
+]
+markers = [
+    "unit: 纯函数单测",
+    "integration: 涉及网络/IO",
+    "slow: 慢速测试",
+]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:okx.code.*",
+]
+
+# ──────── coverage ────────
+
+[tool.coverage.run]
+source = ["okx.code"]
+omit = [
+    "*/__pycache__/*",
+    "*/tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+show_missing = true
+precision = 2
+
+# ──────── ruff ────────
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+exclude = [".git", "__pycache__", "build", "dist", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E501",  # 行太长（暂不强制）
+    "B008",  # 函数调用作为默认参数
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]  # 测试允许 import 在代码后
