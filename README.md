@@ -1,8 +1,10 @@
 # OKX 量化交易系统
 
-> 版本：v1.1.0 | 基于 OKX API v5
+> 版本：v1.4 | 基于 OKX API v5
 
-一个由定量规则驱动的加密货币自动化交易系统。当前激活策略为 **EMA20 均线突破 + 量价共振 + RSI 过滤**（策略 A），预留 **布林带 + RSI 均值回归**（策略 B）。
+一个由 **Market Constitution（明文风控准则）** 驱动的加密货币自动化交易系统。当前激活 **4 个策略**（趋势市右侧 + 震荡市左侧 + 波动率爆发 + 资金费率反转），配合 Telegram 实时通知与 portfolio ↔ OKX 自动对账。
+
+**核心理念**：所有交易决策都来自代码 + 配置（不黑盒），所有凭据走环境变量（LLM 永远看不到明文）。
 
 ---
 
@@ -10,230 +12,213 @@
 
 ```
 okx/
-├── __init__.py                # 包根（v1.1.0）
+├── __init__.py                # 包根（v1.4）
 ├── run.sh                     # CLI 启动脚本（自动加载 .env）
 ├── .env                       # 凭据（不入版本控制）
-├── .gitignore
+├── .gitignore                 # state/* 排除（除 config.json）+ 缓存/日志/备份
 │
-├── code/                      # 核心代码（18 个 .py）
-│   ├── __init__.py            # 顶层 API + 暴露 CLI
-│   ├── _http.py               # HTTPClient（底层）
-│   ├── client.py              # OKXClient（统一入口）
-│   ├── cli.py                 # 唯一 CLI 入口
-│   ├── auth.py utils.py
-│   ├── config.py              # 配置加载
-│   ├── portfolio.py logger.py
-│   ├── risk.py                # 风控计算器
-│   ├── signal.py              # 信号引擎
-│   ├── runner.py              # 交易周期调度
-│   └── market.py public.py trade.py
-│       account.py asset.py subaccount.py
+├── code/                      # 核心代码（20 个 .py）
+│   ├── __init__.py            # 顶层 API
+│   ├── _http.py               # HTTPClient + 双模式凭据（OKX_LIVE_* / OKX_DEMO_*）
+│   ├── client.py              # OKXClient 统一入口
+│   ├── cli.py                 # CLI 入口
+│   ├── auth.py                # OKX V5 签名（HMAC-SHA256 + base64）
+│   ├── market.py              # 市场数据（K 线统一返回 oldest → newest）
+│   ├── signal.py              # 信号引擎（4 策略：A/B/C/D）
+│   ├── risk.py                # 风控（ATR 止损 + 净 RR + ctVal 计 PnL）
+│   ├── portfolio.py           # 持仓 + reconcile_with_okx() 自动对账
+│   ├── runner.py              # 交易周期调度（每 5 分钟）
+│   ├── notifier.py            # Telegram 通知层（7 类事件 + drift 告警）
+│   ├── market_filter.py       # 流动性/黑名单过滤
+│   ├── config.py / utils.py / logger.py
+│   └── public.py trade.py account.py asset.py subaccount.py
 │
-├── scripts/                   # 运维工具
-│   ├── convert_env.py         # docs/KEY.md → .env
-│   ├── verify_env.py          # 验证 .env 加载
-│   └── test_connection.py     # API 连通性测试
+├── scripts/                   # 运维工具（9 个）
+│   ├── convert_env.py         # 双模式凭据分组解析
+│   ├── verify_env.py          # 验证 .env 加载（✓/✗ 不打真值）
+│   ├── audit_credentials.py   # 凭据完整性静态审计（mask 输出）
+│   ├── test_connection.py     # 公+私 API 连通性 + 延迟
+│   ├── sync_portfolio.py      # portfolio ↔ OKX 手动对账
+│   ├── test_notifier.py       # Telegram 通知 7 类测试
+│   ├── verify_order_chain.py  # 信号→风控→下单 端到端验证
+│   ├── daily_summary.py       # 每日报告生成
+│   └── runner_watchdog.py     # watchdog 健康检查
 │
-├── tests/                     # 单元测试
-│   ├── __init__.py
-│   ├── test_risk.py           # RiskCalculator 覆盖
-│   └── test_signal.py         # SignalEngine 辅助函数
+├── tests/                     # 单元测试（98/98 ✓）
+│   ├── conftest.py
+│   ├── test_risk.py           # 风控 + 净 RR + 杠杆矩阵
+│   ├── test_signal.py         # EMA / RSI / ATR / BB / 策略 C/D
+│   ├── test_utils.py          # side / pos_side / time format
+│   └── test_constitution.py   # Constitution 配置 + 熔断
 │
 ├── prompts/                   # AI 决策 prompt
 │   ├── JOB-DISCIPLINE.md      # 角色定义
-│   └── trade-rule.md          # 决断准则
+│   └── trade-rule.md          # 决断准则（Market Constitution 原文）
 │
 ├── docs/                      # 技术文档
 │   ├── OKX-API-v5-Trading-Documentation.md
-│   ├── WORKFLOW.md SIGNALS.md SECURITY.md
+│   ├── WORKFLOW.md            # 系统工作流
+│   ├── SIGNALS.md             # 4 策略信号定义
+│   ├── SECURITY.md            # 双模式凭据 + LLM 隔离规范
+│   ├── NOTIFIER.md            # Telegram 通知层
 │   └── examples/basic_usage.py
 │
-├── state/                     # 运行时状态
-│   ├── config.json            # 交易配置
-│   ├── portfolio.json         # 持仓快照
-│   └── last_workflow_result.json
+├── state/                     # 运行时状态（git 跟踪仅 config.json）
+│   ├── config.json            # 交易配置（策略/风控参数版本化）
+│   └── .gitkeep
 │
-└── logs/trades/               # 每日交易日志 CSV
+└── logs/                      # 运行时日志（git 忽略）
+    ├── .gitkeep
+    └── trades/                # 每日成交 CSV
 ```
 
 ---
 
 ## 🚀 快速开始
 
-### 1. 配置 API 凭据
+### 1. 配置 API 凭据（双模式）
 
 ```bash
-# 编辑 docs/KEY.md，填入你的 OKX API 凭据
-$EDITOR docs/KEY.md
+# 编辑 .env，填入 OKX_LIVE_* 和 OKX_DEMO_* 两组凭据
+# 选激活模式：OKX_TRADING_MODE=live  或  demo
+cp .env.template .env  # 或参考 docs/SECURITY.md 手动创建
+chmod 600 .env
 
-# 生成 .env（不进入版本控制）
-./run.sh scripts/convert_env.py
+# 验证凭据完整性（不打印真值，只审计格式）
+./run.sh scripts/audit_credentials.py
 
-# 验证配置
-./run.sh scripts/verify_env.py
-```
-
-### 2. 测试连接
-
-```bash
+# 验证连通性（公+私 API + 延迟）
 ./run.sh scripts/test_connection.py
 ```
 
-### 3. 运行交易
+### 2. 运行交易
 
 ```bash
-# CLI 运维
-./run.sh status            # 系统状态（人读字符串）
+# CLI 运维（人读字符串 / JSON）
+./run.sh status            # 系统状态
 ./run.sh summary           # 组合摘要（JSON）
-./run.sh run               # 手动执行一个完整交易周期
-./run.sh stop              # 开启紧急熔断
-./run.sh resume            # 关闭紧急熔断
-./run.sh close-all         # 一键平所有持仓 + 自动熔断
+./run.sh run               # 手动执行一个完整周期（含 SL/TP/趋势反转/对账）
 
-# Python API
-python3 -c "from okx.code import OKXClient; print(OKXClient().market.get_ticker('BTC-USDT'))"
+# 手动 portfolio ↔ OKX 对账（当 OKX 持仓跟本地不一致时）
+./run.sh scripts/sync_portfolio.py --dry-run
+./run.sh scripts/sync_portfolio.py --reason "after_web_manual_trade"
+
+# 紧急熔断
+./run.sh stop              # 禁止新开仓
+./run.sh resume            # 解除
+./run.sh close-all         # 一键平所有持仓
 ```
 
-### 4. 单元测试
+### 3. 单元测试
 
 ```bash
-pytest tests/ -v
-# 或
-python3 -m pytest tests/ -v
+./run.sh scripts/verify_env.py   # 先验证 env
+pytest tests/ -v                 # 98/98 ✓
 ```
 
 ---
 
-## 🔧 交易配置
+## 🛡️ Market Constitution（风控准则）
 
-`state/config.json` 包含全部可调参数，**在线修改后无需重启**（`Config` 实例会自动 reload）：
+`state/config.json` + `prompts/trade-rule.md` 定义了一整套明文规则，系统在每个信号/开仓前都会校验：
 
-```json
-{
-  "trading": {
-    "timeframe": "15m",
-    "whitelist_symbols": ["BTCUSDT", "ETHUSDT"],
-    "margin_mode": "isolated",
-    "default_leverage_main": 5,
-    "max_leverage_limit": 10,
-    "max_concurrent_positions": 3,
-    "emergency_stop": false,
-    "demo_mode": true
-  },
-  "risk": {
-    "max_loss_percent_per_trade": 2.0,
-    "min_reward_risk_ratio": 1.5,
-    "daily_max_loss_trades": 3,
-    "sl_buffer_percent": 0.5,
-    "atr_multiplier": 2.0,
-    "time_stop_hours": 2,
-    "slippage_bps": 5,
-    "taker_fee_rate": 0.00055
-  },
-  "strategy_a": {
-    "name": "EMA20_BREAKOUT",
-    "enabled": true,
-    "ema_period": 20,
-    "kline_count_for_confirmation": 2,
-    "volume_ratio_threshold": 1.2,
-    "atr_period": 14,
-    "rsi_period": 14,
-    "rsi_overbought": 65,
-    "rsi_oversold": 35
-  }
-}
-```
+| 维度 | 规则 |
+|---|---|
+| **杠杆矩阵** | BTC/ETH 5-10x 按 ATR 动态调整；山寨币 3-5x；高波动资产 0x 禁用 |
+| **流动性过滤** | 24h 量 < 5000万 USDT 或 funding \|rate\| > 0.1% → 拦截 |
+| **不确定性决策树** | 置信度 < 0.5 → HOLD；偏离最佳入场点 > 1% → 严禁追单 |
+| **熔断冷静期** | 连续亏损 ≥ 3 次 → 30 分钟 cooldown |
+| **手续费/盈利比** | ratio > 阈值 → 警告 + 提高开仓门槛 |
+| **净盈亏比** | 扣除手续费（taker 0.055% × 2）+ 滑点（5bps × 2）后净 RR ≥ 1.5 |
+| **三批分级止盈** | 第一批 RR=1:1 平 30%；第二批 RR=1.5:1 平 30%；最后 40% 追踪止盈 |
+| **时间止损** | 持仓 > 2h 且未达 1:1 RR → 强制平仓 |
 
 ---
 
-## 📈 核心交易逻辑
+## 📈 4 个策略
 
-### 策略 A：EMA20 均线突破 + 量价共振（已激活）
+| ID | 名称 | 适用市况 | 触发条件概要 |
+|---|---|---|---|
+| **A** | `EMA20_BREAKOUT` | 趋势市右侧 | EMA20 同侧确认 + 量价共振（量比 ≥ 1.2）+ RSI 过滤（不追超买/超卖） |
+| **B** | `BB_RSI_REVERSION` | 震荡市左侧 | BB 触轨 + RSI 极值（>70/<30）+ 反转 K 线形态 |
+| **C** | `VOLATILITY_BREAKOUT` | 波动率盘整后爆发 | BBW 收缩（双 K 线 BBW < squeeze_threshold）+ 突破 BB 上下轨 + 量能 ≥ 1.5x |
+| **D** | `FUNDING_RATE_REVERSAL` | 资金费率极端反转 | funding \|rate\| > 0.05% 持续 + RSI 反向确认 |
 
-| 条件 | 做多 | 做空 |
-|------|------|------|
-| **价格** | 连续 2 根 K 线收盘价 > EMA20 | 连续 2 根 K 线收盘价 < EMA20 |
-| **EMA 方向** | 3 根 K 线斜率由负转正（上翘） | 3 根 K 线斜率由正转负（下拐） |
-| **成交量** | ≥ 前 5 均量 × 1.2 | ≥ 前 5 均量 × 1.2 |
-| **RSI 过滤** | RSI < 65（不追超买） | RSI > 35（不追超卖） |
-| **止损** | ATR14 × 2.0（保底 0.5%） | ATR14 × 2.0（保底 0.5%） |
-| **止盈** | 止损距离 × 1.5 | 止损距离 × 1.5 |
-
-**净盈亏比校验**：扣除手续费（taker 0.055% × 2）+ 滑点（5bps × 2）后，净盈亏比仍需 ≥ 1.5。
-
-### 风控规则
-
-- **单笔最大亏损**：账户余额 × 2%
-- **杠杆硬上限**：10x（超过即拒绝开仓）
-- **连续亏损熔断**：≥ 3 次后禁止新开仓
-- **最大同时持仓**：3 个交易对
-- **人工熔断**：`emergency_stop` 字段（CLI: `./run.sh stop`）
-- **时间止损**：持仓 > 2h 且未达 1:1 盈亏比 → 强制平仓
+详细信号定义见 `docs/SIGNALS.md`。
 
 ---
 
-## 🤖 OpenClaw 集成
+## 🔁 Portfolio ↔ OKX 自动对账
 
-### Heartbeat 检查
+每次 Runner 启动第一步会拉 OKX 真实持仓，跟本地 portfolio 比对：
 
-在 `HEARTBEAT.md` 中加入：
+| 场景 | 处理 |
+|---|---|
+| 本地有 / OKX 无 | 视为外部平仓 → 归档到 `closed_positions`，写入 OKX history 真实 realizedPnl |
+| 本地无 / OKX 有 | 视为手动开仓 → 自动补到本地（含 SL/TP/ctVal/mgn_mode） |
+| size/direction 不一致 | 归档旧记录，从 OKX 重建 |
 
+漂移发生时自动调用 `Notifier.notify_drift()` 推 Telegram 告警（需配置 bot token）。
+
+CLI 手动对账：`./run.sh scripts/sync_portfolio.py [--dry-run] [--reason ...]`
+
+---
+
+## 🤖 Telegram 通知（可选）
+
+`.env` 配置：
 ```bash
-python3 -c "from okx.code import run_heartbeat_check; print(run_heartbeat_check())"
+TELEGRAM_BOT_TOKEN=<your_bot_token_here>
+TELEGRAM_CHAT_ID=<your_chat_id_here>
 ```
 
-### Cron 定时执行
+支持 7 类事件：开仓 / 平仓（盈/亏）/ 部分平 / 错误（5min dedup）/ 每日报告 / 心跳 / drift 告警
 
-```bash
-# 15 分钟 K 线结算点执行（每 15 分钟）
-*/15 * * * *  cd /home/zzzx47/.openclaw/workspace && ./okx/run.sh run > /tmp/okx-run.log 2>&1
-```
+详见 `docs/NOTIFIER.md`。
 
 ---
 
-## 🧪 开发与测试
+## ⏰ Cron 调度
 
-### 目录约定
-
-- `code/` — 业务核心（不可放工具脚本）
-- `scripts/` — 一次性运维工具
-- `tests/` — 单元测试
-- `docs/` — 技术文档（人读）
-- `prompts/` — AI prompt 工程（机器读）
-- `state/` — 运行时持久化（git 跟踪，但人少改）
-- `logs/` — 运行时日志（git 忽略）
-
-### 提交规范
-
-- 凭据（`.env`、`docs/KEY.md`）**绝不入版本控制**
-- 修改 `state/config.json` 需在 commit message 标注 `config:`
-- 修改策略/风控参数需同步更新 `docs/SIGNALS.md` / `prompts/trade-rule.md`
+| 频率 | 任务 | 方式 |
+|---|---|---|
+| 每 5 分钟 | Runner 完整周期 | Linux crontab |
+| 每天 23:00 | daily_summary | Linux crontab |
+| 每天 23:30 | AI 复盘 | OpenClaw cron (isolated + Telegram announce) |
+| 每天 00:00 | 异常诊断 | OpenClaw cron |
+| 每天 08:00 | 早间心跳 | OpenClaw cron |
+| 每 15 分钟 | Runner watchdog | OpenClaw cron |
 
 ---
 
 ## 🔐 安全
 
-- API 凭据隔离：`run.sh` 在 shell 层加载 `.env`，Python 代码只读 `os.getenv`
-- LLM 接触不到明文密钥
+- **凭据隔离**：`.env` 由 `run.sh` 在 shell 层加载，Python 代码只读 `os.getenv`，LLM 永远看不到明文
+- **双模式架构**：`OKX_LIVE_*` 和 `OKX_DEMO_*` 隔离，避免误用
+- **gitignore**：`.env`、`state/portfolio.json`、`state/sync_history.json`、`state/last_workflow_result.json`、所有日志、Python 缓存
+- **状态版本化**：仅 `state/config.json` 入版本控制（策略/风控参数可追溯）
 - 详见 `docs/SECURITY.md`
 
 ---
 
 ## 📚 文档索引
 
-- **架构**：`docs/WORKFLOW.md`
-- **信号定义**：`docs/SIGNALS.md`
-- **API 参考**：`docs/OKX-API-v5-Trading-Documentation.md`
-- **凭据安全**：`docs/SECURITY.md`
-- **AI 角色**：`prompts/JOB-DISCIPLINE.md`
-- **AI 决断准则**：`prompts/trade-rule.md`
+| 文档 | 内容 |
+|---|---|
+| `docs/WORKFLOW.md` | 系统工作流与执行时序 |
+| `docs/SIGNALS.md` | 4 策略信号定义 |
+| `docs/NOTIFIER.md` | Telegram 通知层 |
+| `docs/SECURITY.md` | 双模式凭据 + LLM 隔离 |
+| `docs/OKX-API-v5-Trading-Documentation.md` | OKX V5 API 速查 |
+| `prompts/JOB-DISCIPLINE.md` | AI 角色定义 |
+| `prompts/trade-rule.md` | Market Constitution 原文 |
 
 ---
 
 ## ⚠️ 注意事项
 
-1. **模拟盘优先**：`OKX_FLAG=1` 是模拟盘，验证充分后再切 `0`
-2. **参数调整**：`state/config.json` 在线修改即可生效
-3. **日志审计**：`logs/trades/YYYY-MM-DD.csv` 是成交记录唯一来源
-4. **紧急熔断**：极端行情下优先 `./run.sh stop` 再排查
-5. **P0 重构后**（2026-07-10）：统一 CLI 入口，废弃旧的 `workflow.py` / `run_workflow.py`
+1. **模拟盘优先**：`OKX_TRADING_MODE=demo` 验证充分后再切 `live`
+2. **K 线方向**：`code/market.py:get_candles` 已统一返回 `oldest → newest`，业务层用 `[-1]` 即可拿到最新
+3. **PnL 计算**：使用 OKX `ctVal`（每张合约对应的标的数量）做正确换算（0.55 张 ETH = 0.055 ETH，不是 0.55 ETH）
+4. **mgn_mode**：每个仓位按 OKX 实际 `mgnMode`（cross/isolated）调用 close API，避免 51023
+5. **demo K 线延迟**：OKX demo 环境 K 线数据可能延迟，趋势判定一律用 ticker 实时价
