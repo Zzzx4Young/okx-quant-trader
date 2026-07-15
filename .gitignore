@@ -50,4 +50,8 @@ Thumbs.db
 
 # ─── 测试与备份 ─────────────────────────────────────
 /tmp/okx-*/
+
+# ─── AI agent 上下文目录（不入仓）──────────────────
+# docs/agent-context/ 是 AI 助手的参考上下文（含设计稿 / 脆弱性扫描 / 评估 doc）
+docs/agent-context/
 .cache/
