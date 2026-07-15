@@ -1,9 +1,7 @@
 # ─── 凭据（绝对不入版本控制） ─────────────────────────
 .env
 .env.*
-docs/KEY.md
-docs/KEY.md.*
-!docs/KEY.md.template
+!.env.example
 
 # ─── 密钥本地缓存 ─────────────────────────────────────
 *.pem

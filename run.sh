@@ -6,7 +6,7 @@
 #   ./run.sh <cli_action>           # 运维命令：status / run / stop / resume / close-all / summary
 #   ./run.sh scripts/xxx.py         # scripts/ 下的工具脚本
 #   ./run.sh tests/test_xxx.py      # 单元测试
-#   ./run.sh docs/examples/xxx.py   # 示例
+#   ./run.sh docs/agent-context/xxx.py   # 示例
 #   ./run.sh -m okx.code.cli <arg>  # 透传 python -m
 
 set -e
@@ -16,7 +16,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"  # okx/ 的父目录（包根）
 
 ENV_FILE="$SCRIPT_DIR/.env"
 if [ ! -f "$ENV_FILE" ]; then
-    echo "错误: .env 文件不存在，请先运行: ./run.sh scripts/convert_env.py"
+    echo "错误: .env 文件不存在，请先：cp .env.example .env && 编辑填值"
     exit 1
 fi
 
@@ -68,8 +68,8 @@ if [[ $# -ge 1 ]] && [[ " $CLI_ACTIONS " == *" $1 "* ]]; then
     exec python3 -m okx.code.cli "$@"
 fi
 
-# 相对路径快捷方式：scripts/ tests/ docs/examples/ → 自动加 okx/ 前缀
-if [[ $# -ge 1 && "$1" =~ ^(scripts|tests|docs/examples)/ ]]; then
+# 相对路径快捷方式：scripts/ tests/ docs/agent-context/ → 自动加 okx/ 前缀
+if [[ $# -ge 1 && "$1" =~ ^(scripts|tests|docs/agent-context)/ ]]; then
     set -- "okx/$@"
 fi
 

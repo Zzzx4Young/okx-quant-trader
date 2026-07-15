@@ -413,7 +413,7 @@ while page_count < max_pages:
 
 ### 原则 5：凭据永远不进 LLM 上下文
 
-> 见 `docs/SECURITY.md` "LLM 不接触明文" 章节。核心：
+> 见 README "🛡 安全模型（关键设计）" → "凭据隔离（单层 .env）" 节（v1.7 起 SECURITY.md 已并入 README）。核心：
 - `.env` chmod 600 + gitignore
 - 任何 chat / 文档 / 测试中都不能出现真值
 - 占位符用 `<your_*_here>` 或 `<port>`
@@ -525,5 +525,110 @@ while page_count < max_pages:
 
 ---
 
+## 9. Phase 2 回测里程碑（2026-07-15）
+
+> v1.6 → v1.7 阶段性结论。所有发现都已在 `code/backtest/matcher.py` + `code/backtest/run_phase2_experiment.py` 中验证过，原始输出在 `okx/logs/phase2-final-result.txt`。
+
+### 9.1 4 策略 + 基准综合矩阵（BTC + ETH, 1h, 20 月）
+
+| 策略 | BTC ret | BTC Sharpe | ETH ret | ETH Sharpe | Trades | 关键发现 |
+|---|---|---|---|---|---|---|
+| **A_EMA20_BREAKOUT** | +1.21% | +0.119 | -12.18% | -0.619 | 32 / 34 tranche | BTC 微正 alpha，ETH 风控保护 |
+| **B_BB_RSI_REVERSION** | **-37.16%** | **-1.950** | -15.47% | -0.787 | 30 / 29 tranche | BTC 大牛市被反趋势打脸 |
+| **C_VOLATILITY_BREAKOUT** | **+2.87%** | **+0.208** | -1.19% | +0.039 | 47 / 62 tranche | **最佳策略**，跑赢 buy-and-hold |
+| **D_FUNDING_RATE_REVERSAL** | +0.00% | +0.000 | +0.00% | +0.000 | 0 | 1h 频率不适合 |
+| [BENCH] 1x_spot | -6.49% | +0.145 | -27.76% | +0.067 | — | BTC 现货基准 |
+| [BENCH] 5x_leverage | -32.43% | +0.682 | **-100% @bar 3242** | -178.024 | — | ETH 爆仓（基准动态模拟有效） |
+
+### 9.2 唯一真 alpha：C_Volatility_Breakout
+
+C 在 BTC 上 +2.87% / Sharpe +0.208，**跑赢 buy-and-hold -6.49%**（买入持有是负的，所以 +2.87% 是真实 alpha）。47 笔交易 / 50% 胜率 / 62 tranche 命中。**这是 Phase 2 唯一能上 LIVE 的策略候选**。
+
+A 勉强：BTC +1.21% 跑赢 buy-hold（差 7.7%），但 Sharpe 偏低 + ETH 负收益 → **单标的适用，不建议 portfolio**。
+
+B/D 在 1h 频率下不可用（见下两节）。
+
+### 9.3 策略 B BTC -37% 根因（bars_held=0 同 bar 即时止损）
+
+**45 笔交易 44 笔 bars_held=0**——同一根 bar 开仓 + 立即触发 SL，亏损 -146 USDT/笔。
+
+根因链：
+1. 测试区间 2024-10 → 2026-07 BTC 单边上涨 +85%（67400 → 125149）
+2. B 是反趋势策略：`close > BB 上轨 + RSI > 55 → 做空`
+3. 单边趋势市里每根 bar 都触发开 short
+4. entry_price = 下一根 bar 的 open，但 SL 是基于 entry_price 算的 0.3% 距离
+5. 大牛市里 0.3% SL 在下一根 bar 就被立即打掉
+
+**调参方向**：加 trend filter（如 EMA200 long-only / short-only gate）。**当前建议不上 LIVE**。
+
+### 9.4 策略 D 1h 频率不可用（funding 太稀疏）
+
+20 月只有 292 条 funding events ≈ 每天 0.47 条，分布：
+- |x| mean 0.0043%，max 0.0109%
+- 阈值 0.05% → 0 触发
+- 阈值 0.02% → 0 触发
+- 阈值 0.01% → 1 触发
+
+**结论**：D 需要 5m 或 15m 数据 + 阈值调整（≤0.01%）才有可能产生足够样本。**当前 1h 数据下永不开仓**。
+
+### 9.5 撮合引擎 bug 清单（已修）
+
+| Bug | 现象 | 修复 | Phase 验证 |
+|---|---|---|---|
+| #11 | SL fill 后未 `self.position = None` | `_record_fill` 末尾加 finalize | C 47 笔 / A 32 笔都正确归档 |
+| #12 | MaxDD 数学溢出（equity < 0） | 检测 ≤0 直接 cap 100% | 所有策略 MaxDD 在合理范围 |
+| #13 | O(n²) 复杂度（df.ewm 每 bar 重算） | 一次性 `_compute_indicators()` | 实验从 2m+ 降到 31s |
+| #14 | stdout block-buffered | `python3 -u` + `-u` flag | 输出实时可见 |
+
+### 9.6 5x 杠杆基准的爆仓模拟（验证动态模拟有效）
+
+ETH 在 2024-12 测试区间暴跌 -27%，5x 杠杆 buy-and-hold 在 bar 3242 触发爆仓（equity → 0）。这证明：
+- **动态爆仓模拟正确实现**（不是简单 -100% cap）
+- **基准必须用杠杆等价的策略模拟**，否则高杠杆爆仓情景会被低估
+- **未来调参方向**：评估策略最大回撤时，看它相对"等杠杆基准"是否跑赢
+
+### 9.7 Phase 2 引擎稳定性结论
+
+- 13 个新增单测覆盖 whitelist + sentinel + 正常路径 + 混合场景 → **111/111 全过**
+- 与昨晚第三次跑结果一致 → **撮合引擎无回归**
+- A+C 双锁修复 24h 内连踩两次同款 footgun（-3.99 USDT）后合入
+
+---
+
+## 10. v1.7 关键修复（2026-07-15）
+
+### 10.1 外部 / Web 手动开仓 = sentinel sl/tp=0 + MANUAL_NO_AUTO_CLOSE
+
+**24h 内连踩两次同款 footgun（-3.3189 + -0.671 = -3.99 USDT）**：
+1. Nixil 手动在 OKX Web 开 BTC 空单
+2. `sync_portfolio.py` 给外部仓合成 0.3% SL 太激进
+3. runner 不分 strategy 来源 → 自动市价平仓
+4. 用户手动仓被系统当作策略仓平掉
+
+**修复（Defense-in-Depth A+C combo）**：
+- **A 防线（sentinel）**：`sync_portfolio.py` 给 EXTERNAL_WEB_SYNC 仓位设 `sl_price=0, tp_price=0`；runner 见 0 跳过 SL/TP
+- **C 防线（whitelist）**：`strategy=MANUAL_NO_AUTO_CLOSE` 显式标记；runner 白名单命中直接 HOLD_MANUAL
+- **防御顺序**：即便未来有人在 sync 端绕过了 sentinel 写非零 SL，runner 仍能通过 whitelist 拦截
+
+教训：**外部副作用链路 sync→portfolio→runner 不可越过 strategy 边界**。任何把"外部仓"当"策略仓"处理的代码路径都是 footgun。
+
+### 10.2 cron `delivery.announce` 默认无脑投递所有 final reply
+
+`scripts/runner_watchdog.py` 设计了"健康时不发 Telegram"（`if not issues: return True`），但 OpenClaw cron 的 `delivery.announce` 默认把 isolated session 的 **final reply 无脑投递**到 Telegram → watchdog 每 15min 一次"✓ 健康"噪声 = **每天 96 条**。
+
+**修复**：`openclaw cron edit <id> --no-deliver` 把 delivery.mode 设为 `none`，让脚本内 TelegramNotifier 接管 critical 告警。注：2026.7.1 CLI 已废弃 `cron update --patch`，正确命令是 `cron edit`。
+
+教训：**脚本设计"安静模式"也要小心 announce 会绕过**。OpenClaw cron 的 delivery 优先级高于脚本内部 dedup。
+
+### 10.3 systemd drop-in 防升级重置 proxy env
+
+之前两次 systemd unit 修复都是手动改 main unit 文件（2026-07-10 和 2026-07-14）。**根因：OpenClaw 升级会重写 main unit，把 Environment 段清掉**。
+
+**修复**：写 drop-in 文件 `~/.config/systemd/user/openclaw-gateway.service.d/proxy.conf`。systemd merge 优先级 drop-in 覆盖 main unit 升级。**未来升级时 env 自动保留**。
+
+教训：**所有依赖外部网络的 daemon 都该用 drop-in 注入 env**——是 systemd 标准做法，比改 main unit 更鲁棒。
+
+---
+
 _文档维护：每次发现新 bug 或重要 ADR 时更新本文件。_
-_最后更新：2026-07-13 23:02（v1.6 归档，新增 Bug 10 + Header 实测 + OKX fetcher 开发铁律）_
+_最后更新：2026-07-15 23:00（v1.7 归档，新增 Phase 2 回测 milestone + 3 个关键修复）_

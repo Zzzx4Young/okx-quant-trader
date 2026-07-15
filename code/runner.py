@@ -16,7 +16,7 @@ import time
 import os
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import get_config
 from .client import OKXClient
@@ -480,6 +480,51 @@ class Runner:
             return f"{base}-USDT-SWAP"
         return symbol  # 兜底返回原值
 
+    @staticmethod
+    def _filter_skip_positions(positions: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """白名单 + 哨兵值双重过滤（P0-4 fix: 2026-07-15）
+
+        防止手动 / 外部同步仓位被系统自动平仓：
+        - C 防线：strategy 名命中白名单 → HOLD_MANUAL
+        - A 防线：sl_price=0 + tp_price=0 哨兵值 → HOLD_NO_PROTECTION（即便白名单被绕过，仍能拦截）
+
+        :param positions: 原始持仓列表
+        :return: (kept_positions, skipped_actions) — skipped_actions 是 dict 列表，
+                 可直接 append 到 results["updated"]
+        """
+        NO_AUTO_CLOSE_STRATEGIES = {"MANUAL_NO_AUTO_CLOSE", "EXTERNAL_WEB_SYNC"}
+        kept: List[Dict[str, Any]] = []
+        skipped: List[Dict[str, Any]] = []
+        for pos in positions:
+            strategy = pos.get("strategy") or pos.get("strategy_name", "")
+            try:
+                sl = float(pos.get("sl_price", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                sl = 0.0
+            try:
+                tp = float(pos.get("tp_price", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                tp = 0.0
+
+            if strategy in NO_AUTO_CLOSE_STRATEGIES:
+                # C 防线：策略名命中白名单 → 显式跳过 + 日志记录
+                skipped.append({
+                    "symbol": pos["symbol"],
+                    "action": "HOLD_MANUAL",
+                    "reason": f"strategy={strategy} 跳过自动 SL/TP 管理（手动/外部仓）",
+                })
+                continue
+            if sl <= 0 and tp <= 0:
+                # A 防线：哨兵值 → 物理防呆（即便白名单被绕过，仍能拦截）
+                skipped.append({
+                    "symbol": pos["symbol"],
+                    "action": "HOLD_NO_PROTECTION",
+                    "reason": "sl_price=0 + tp_price=0 哨兵值，判定为无自动保护单，跳过托管",
+                })
+                continue
+            kept.append(pos)
+        return kept, skipped
+
     def check_and_close_positions(self) -> Dict[str, Any]:
         """
         检查当前持仓是否触发止盈/止损/趋势反转，必要时平仓
@@ -496,6 +541,14 @@ class Runner:
         results = {"closed": [], "updated": [], "errors": []}
         positions = self._portfolio.get_all_positions()
 
+        if not positions:
+            return results
+
+        # ── 0. 白名单 + 哨兵值双重防呆 (P0-4 fix: 2026-07-15) ──
+        # A+C 双锁：sentinel sl_price=0/tp_price=0（物理防呆）+ strategy 白名单（逻辑隔离）
+        # 24h 内连踩两次同款 footgun（-3.3189 + -0.671 = -3.99 USDT 损失）
+        positions, skipped_actions = Runner._filter_skip_positions(positions)
+        results["updated"].extend(skipped_actions)
         if not positions:
             return results
 

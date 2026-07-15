@@ -29,7 +29,7 @@ def verify_env() -> bool:
 
     if not all([api_key, secret_key, passphrase]):
         print("\n✗ 错误: 缺少必需的环境变量")
-        print("  请运行: python3 scripts/convert_env.py")
+        print("  请执行: cp .env.example .env && 编辑填值")
         return False
 
     print("\n" + "=" * 50)

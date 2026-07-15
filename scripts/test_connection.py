@@ -462,7 +462,7 @@ def main() -> int:
     if not creds_ok and not args.skip_private:
         if not args.json:
             print(f"{C.RED}✗ 凭据不完整，请先配置 .env{C.RESET}")
-            print(f"  参考：./run.sh scripts/convert_env.py")
+            print(f"  参考：cp .env.example .env && 编辑填值")
         return 2
 
     raw_symbols = args.symbols.split(",") if args.symbols else get_default_symbols()

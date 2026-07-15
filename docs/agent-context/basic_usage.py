@@ -3,13 +3,13 @@
 """
 OKX API v5 使用示例
 
-运行前请确保 docs/KEY.md 中配置了正确的 API 凭据，或设置环境变量：
-    export OKX_API_KEY=your_api_key
-    export OKX_API_SECRET=your_secret_key
-    export OKX_PASSPHRASE=your_passphrase
-    export OKX_FLAG=1  # 1=模拟盘，0=实盘
+运行前请确保项目根 .env 中配置了正确的 API 凭据（参考 .env.example），或设置环境变量：
+    export OKX_DEMO_API_KEY=your_api_key
+    export OKX_DEMO_API_SECRET=your_secret_key
+    export OKX_DEMO_PASSPHRASE=your_passphrase
+    export OKX_TRADING_MODE=demo
 
-执行方式：./run.sh docs/examples/basic_usage.py
+执行方式：./run.sh docs/agent-context/basic_usage.py
 """
 
 from okx.code import OKXClient

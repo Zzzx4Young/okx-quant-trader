@@ -283,7 +283,13 @@ def reconcile(
         pos_id = op.get("posId", "")
         direction = "long" if op.get("posSide") == "long" else "short"
 
-        sl_tp = _synthesize_sl_tp(entry, direction)
+        # ── P0-4 fix (2026-07-15): 外部 / Web 手动开仓不合成 SL/TP ──
+        # 24h 内踩过两次同款 footgun（-3.3189 + -0.671 = -3.99 USDT 损失）
+        # 根因：_synthesize_sl_tp 给外部手动仓套 0.3% SL，runner 不分 strategy 一律自动平仓
+        # 修复：A+C 双锁 ——
+        #   (A) sentinel: sl_price=0 / tp_price=0（物理防呆，runner 见 0 跳过）
+        #   (C) 显式 strategy 名 MANUAL_NO_AUTO_CLOSE（逻辑隔离，便于 audit / dashboard）
+        # 白名单兼容旧名 EXTERNAL_WEB_SYNC（历史 closed_positions 已使用）
 
         new_pos = {
             "symbol": op.get("instId").replace("-USDT-SWAP", "USDTSWAP"),
@@ -294,22 +300,24 @@ def reconcile(
             "margin": margin_est,
             "order_id": pos_id,
             "opened_at": opened_iso,
-            "strategy": "EXTERNAL_WEB_SYNC",
+            "strategy": "MANUAL_NO_AUTO_CLOSE",  # was: "EXTERNAL_WEB_SYNC"
             "source": "okx_sync_reconcile",
-            "sl_price": sl_tp["sl_price"],
-            "tp_price": sl_tp["tp_price"],
+            "sl_price": 0.0,  # 哨兵值 — runner 见 0 跳过 SL 检查
+            "tp_price": 0.0,  # 哨兵值 — runner 见 0 跳过 TP 检查
             "tp_stage": 0,
-            "trigger_strategy": "EXTERNAL_WEB_SYNC",
+            "trigger_strategy": "MANUAL_NO_AUTO_CLOSE",  # was: "EXTERNAL_WEB_SYNC"
             "adl": op.get("adl", ""),
             "mark_px_at_sync": mark,
             "mgn_mode": op.get("mgnMode", "") or "",
             "ct_val": float(ct_val_by_inst.get(op.get("instId"), 1.0)),
+            "is_manual": True,  # 显式标记
         }
         local["positions"].append(new_pos)
         new_synced.append(new_pos)
         actions.append(
             f"new → portfolio: {op.get('instId')} {direction} sz={sz} "
-            f"entry={entry} mark={mark} SL={sl_tp['sl_price']} TP={sl_tp['tp_price']}"
+            f"entry={entry} mark={mark} strategy=MANUAL_NO_AUTO_CLOSE "
+            f"SL=0 TP=0 (哨兵值 - 手动仓位不自动管，参见 runner.check_and_close_positions 白名单)"
         )
 
     local["daily_stats"] = daily
