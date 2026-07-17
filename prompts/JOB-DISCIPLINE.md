@@ -62,3 +62,51 @@
     "sl_price": 59500.00    // 止损价
   }
 }xxxxxxxxxx {  "thought_process": "当前EMA20上穿EMA50，且RSI为55未超买。账户无持仓，符合趋势跟随做多逻辑。当前价61000，支撑位在59800。",  "decision": {    "action": "OPEN_LONG",    // 允许值: OPEN_LONG, OPEN_SHORT, CLOSE_ALL, HOLD, UPDATE_SL    "leverage": 5,    "size_usdt": 200,         // 开仓保证金    "entry_type": "MARKET",   // 市价单进场    "tp_price": 63400,        // 止盈价 (盈亏比 1:2)    "sl_price": 59800         // 止损价  }}json
+
+
+---
+
+## 6. 脚本设计纪律：cron job 不是 raw stdout 执行
+
+⚠️ **关键心智模型**：OpenClaw cron 的 isolated sub-session 里跑的是 **LLM agent**，不是裸脚本。
+
+执行链路：
+```
+cron schedule → isolated sub-session → LLM agent 运行脚本
+       → agent 整理 stdout → 投递到 Telegram (channel: telegram)
+```
+
+这意味着：用户看到的不是 raw log，是 **agent 整理后的格式化摘要**（如 "✓ 健康，无问题" 或 "❌ critical: ... | 💰 净值 | 📐 总名义 | 🛑 强平距离"）。
+
+### 6.1 脚本输出纪律
+
+1. **结构化分段**：用 STATUS / DATA / ISSUES 三段式，让 agent 容易 pick up 重点
+2. **关键指标显眼**：emoji + `key=value` 标注（如 `💰 净值: $78,377.06`），agent 优先抓这些
+3. **冗余降噪**：不要 100 行 debug print；agent 摘要 100 行会变形
+4. **exit code 是契约**：`0`=健康 / `1`=degraded / `2`=critical（agent 读 exit code 决定告警语气）
+5. **告警路径单选**：脚本内 `TelegramNotifier` 已在 critical 时推送，**不要再叠 cron `delivery.announce` 兜底**——二者择一即可
+
+### 6.2 `delivery.mode` 选择（2026-07-18 修正）
+
+| 模式 | 适用 | 不适用 |
+|---|---|---|
+| `announce`（**默认**） | 监控/巡检类 cron → agent 心跳可见 | — |
+| `none` | 严格禁止作为默认（= 零可见性，包括 critical 看不见） | — |
+| `--no-deliver` | **仅在敏感时段临时禁言**（如重大事件窗口） | 不是"消除噪声"的修复手段 |
+
+### 6.3 反模式（绝对不要）
+
+- ❌ 把"raw log + Telegram Notifier 双路径"当"减少噪声" → 实际是双重通知
+- ❌ 让 cron 跑 silent 脚本"靠看 `watchdog.log` 文件" → 0 可见性
+- ❌ 假设 cron 是"裸脚本 + 投递 stdout" → 忽略 LLM agent 在中间环节
+
+### 6.4 设计自检清单
+
+新增 OKX 监控/巡检脚本时，问自己：
+- [ ] 脚本输出分段清晰（STATUS/DATA/ISSUES）？
+- [ ] 关键指标用 emoji 标注让 agent 容易抓？
+- [ ] exit code 与告警语义一致（0/1/2）？
+- [ ] 告警路径单选（要么脚本内 Notifier，要么 delivery.announce，不叠加）？
+- [ ] cron job 用 `delivery.mode=announce`（不是 `none`）？
+
+详细推导见 `~/.openclaw/workspace/MEMORY.md` "OKX 业务坑" → cron delivery.announce 章节。

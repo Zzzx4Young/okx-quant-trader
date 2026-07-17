@@ -377,6 +377,9 @@ class BacktestEngine:
         # EMA（pandas vectorized）
         ema_8 = closes.ewm(span=8, adjust=False).mean()
         ema_20 = closes.ewm(span=20, adjust=False).mean()
+        # v1.8: trend filter for 反趋势策略 (B · BB_RSI_REVERSION)
+        ema_50 = closes.ewm(span=50, adjust=False).mean()
+        ema_200 = closes.ewm(span=200, adjust=False).mean()
         
         # RSI(14)
         delta = closes.diff()
@@ -401,6 +404,8 @@ class BacktestEngine:
         return {
             "ema_8": ema_8,
             "ema_20": ema_20,
+            "ema_50": ema_50,
+            "ema_200": ema_200,
             "rsi_14": rsi_14,
             "bb_ma_20": bb_ma,
             "bb_upper": bb_upper,

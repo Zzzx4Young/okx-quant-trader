@@ -94,26 +94,44 @@ def strategy_b_bb_rsi_reversion(df, i, indicators, position, funding_df, symbol)
     """
     B · BB_RSI_REVERSION（震荡左侧反转）
     close < 下轨 + RSI < 45 → long；close > 上轨 + RSI > 55 → short
-    使用缓存指标，O(1) 每 bar。
+
+    v1.8 Fix A：增加 EMA50/EMA200 趋势过滤（v1.7 诊断为 0% win 根因）。
+    - 多头趋势 (ema50 > ema200) → 禁多（反趋势吃不到大牛）
+    - 空头趋势 (ema50 < ema200) → 禁空（反趋势吃不到大熊）
+    - Fix B (中轨出场) 由 BacktestEngine._execute_exit() 通过 BB 中轨 TP 自然覆盖
+      （tp_price = bb_ma_20 = MA20），本函数不需重复。
     """
     if i < 22:
         return None
-    
+
     rsi = indicators["rsi_14"]
     upper = indicators["bb_upper"]
     lower = indicators["bb_lower"]
     closes = df["close"]
-    
+
     if pd.isna(rsi.iloc[i-1]) or pd.isna(lower.iloc[i-1]):
         return None
-    
+
     curr_close = closes.iloc[i-1]
     curr_rsi = rsi.iloc[i-1]
-    
-    if curr_close <= lower.iloc[i-1] and curr_rsi < 45:
-        return "long"
-    if curr_close >= upper.iloc[i-1] and curr_rsi > 55:
-        return "short"
+
+    # v1.8 Fix A: 趋势过滤（用 i-1 避免未来函数，与下面对齐）
+    ema_50 = indicators.get("ema_50")
+    ema_200 = indicators.get("ema_200")
+    bull = bear = False
+    if ema_50 is not None and ema_200 is not None:
+        if i - 1 < len(ema_50) and i - 1 < len(ema_200):
+            e50_v = ema_50.iloc[i - 1]
+            e200_v = ema_200.iloc[i - 1]
+            if not pd.isna(e50_v) and not pd.isna(e200_v):
+                bull = float(e50_v) > float(e200_v)
+                bear = float(e50_v) < float(e200_v)
+
+    # 反趋势入场 + 趋势方向不一致 → 拒绝
+    if curr_close <= lower.iloc[i - 1] and curr_rsi < 45:
+        return "long" if not bull else None
+    if curr_close >= upper.iloc[i - 1] and curr_rsi > 55:
+        return "short" if not bear else None
     return None
 
 

@@ -33,7 +33,7 @@ state/*
 logs/*.log
 logs/*.csv
 logs/trades/*.csv
-!logs/.gitkeep
+logs/*
 
 # ─── 临时与备份文件 ─────────────────────────────────
 *.tmp

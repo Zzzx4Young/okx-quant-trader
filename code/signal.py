@@ -268,6 +268,10 @@ class SignalEngine:
         volumes = [float(c[5]) for c in candles]
         last_time = candles[-1][0]
 
+        # v1.8 Fix A: 趋势过滤需要 200 根 K 线，确保足够回溯
+        if len(closes) < 200:
+            return None  # 不足 200 根不开 B 策略 (v1.8)
+
         # ── 计算布林带 ──
         bb_bands = self._bollinger_bands(closes, period=bb_period, std_dev=bb_std)
         if not bb_bands:
@@ -326,6 +330,23 @@ class SignalEngine:
         ):
             direction = "long"
             reason = f"BB下轨突破 + RSI超卖({current_rsi:.1f}) + 反转K线"
+
+        # v1.8 Fix A: EMA50/EMA200 趋势过滤（与 backtest 对齐）
+        # - 多头趋势 (ema50 > ema200) → 禁多（反趋势吃不到大牛）
+        # - 空头趋势 (ema50 < ema200) → 禁空（反趋势吃不到大熊）
+        if direction is not None:
+            ema50 = self._ema(closes, period=50)
+            ema200 = self._ema(closes, period=200)
+            if ema50 and ema200:
+                curr_ema50 = ema50[-1]
+                curr_ema200 = ema200[-1]
+                if curr_ema50 is not None and curr_ema200 is not None:
+                    bull = curr_ema50 > curr_ema200
+                    bear = curr_ema50 < curr_ema200
+                    if direction == "long" and bull:
+                        direction = None  # 多头期禁多
+                    elif direction == "short" and bear:
+                        direction = None  # 空头期禁空
 
         if direction is None:
             return None
