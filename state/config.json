@@ -15,12 +15,24 @@
     "demo_mode": true
   },
   "risk": {
-    "max_loss_percent_per_trade": 2.0,
+    "max_loss_percent_per_trade": 1.0,
     "min_reward_risk_ratio": 1.5,
     "daily_max_loss_trades": 3,
     "sl_buffer_percent": 0.5,
     "atr_multiplier": 2.0,
     "time_stop_hours": 2,
+    "calibration": {
+      "_comment": "Phase 4 Gate 7 DEMO 实测（v1.8.1, N=50 BTC-USDT-SWAP, 2026-07-18 14:51）",
+      "real_measured_taker_slippage_bps": 5.42,
+      "real_measured_taker_slippage_p95_bps": 7.99,
+      "real_measured_taker_fee_bps": 5.0,
+      "real_measured_vip_level": "Lv1",
+      "sample_size": 50,
+      "fill_rate_market": 1.0,
+      "fill_rate_limit_offset_2bps": 0.48,
+      "source_experiment": "okx/docs/agent-context/experiments/diagnose_demo-gate7-btc-n50-v7-improved-20260718-065112",
+      "rerun_command": "python3 -m okx.scripts.diagnose_okx_demo --inst-id BTC-USDT-SWAP --n-trades 100 --jitter-seconds 1.0 --name gate7-btc-2026Q4"
+    },
     "slippage_bps": 5,
     "taker_fee_rate": 0.00055,
     "tp_partial_ratios": [
@@ -84,20 +96,22 @@
   },
   "leverage_matrix": {
     "BTC": {
-      "min_leverage": 5,
-      "max_leverage": 10,
+      "min_leverage": 3,
+      "max_leverage": 3,
       "hard_ceiling": 3,
       "atr_low": 80,
       "atr_high": 250,
-      "category": "mainstream"
+      "category": "mainstream",
+      "_micro_live_lock": "v1.8.1 阶段 5.2 锁杠杆 3x（路线图要求）"
     },
     "ETH": {
-      "min_leverage": 5,
-      "max_leverage": 10,
+      "min_leverage": 3,
+      "max_leverage": 3,
       "hard_ceiling": 3,
       "atr_low": 5,
       "atr_high": 15,
-      "category": "mainstream"
+      "category": "mainstream",
+      "_micro_live_lock": "v1.8.1 阶段 5.2 锁杠杆 3x（路线图要求）"
     },
     "altcoin_top50": {
       "min_leverage": 3,

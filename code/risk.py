@@ -376,6 +376,156 @@ class RiskCalculator:
         # 锁定在矩阵范围内
         return max(min_lev, min(max_lev, lev))
 
+    # ─────────────────────────────────────────────────────────────
+    # Constitution §3：跨策略冲突过滤 (A↔B 趋势 vs 反转)
+    # ─────────────────────────────────────────────────────────────
+    #
+    # 路线图阶段 3.1（okx/docs/agent-context/okx量化合约交易指南.md）：
+    # - 趋势策略 A 发出做多，震荡策略 B 同时发出做空 → 强制过滤
+    # - 强趋势 (ATR/median 高) 时屏蔽 B（趋势里 B 反转会被甩）
+    # - 极窄震荡 (ATR/median 低) 时屏蔽 A（震荡里 A 假突破多）
+    #
+    # 设计：pure function。所有依赖（recent_signals / atr_ratio）从外部注入，
+    # 方便单测 + 不污染 risk 内部状态。调用方（runner）维护最近 N 分钟信号窗口。
+
+    # 策略的市场制度分类（用于规则 2/3）
+    STRATEGY_REGIME = {
+        "EMA20_BREAKOUT": "trend_follow",       # A：右侧趋势
+        "BB_RSI_REVERSION": "mean_reversion",   # B：左侧反转
+        "VOLATILITY_BREAKOUT": "volatility",    # C：波动率爆发（独立）
+        "FUNDING_RATE_REVERSAL": "funding",     # D：资金费率（独立）
+    }
+
+    # 默认阈值（可被 Config 覆盖）
+    DEFAULT_TREND_HIGH_RATIO = 1.5    # ATR/median ≥ 1.5 视为强趋势
+    DEFAULT_TREND_LOW_RATIO = 0.7     # ATR/median ≤ 0.7 视为窄幅震荡
+    DEFAULT_CONFLICT_WINDOW_MIN = 60  # 同 symbol 反向信号冲突时间窗口（分钟）
+
+    def check_strategy_conflict(
+        self,
+        new_signal: Any,                     # Signal 对象（避免循环 import）
+        recent_signals: list,                # 同 symbol 最近 N 分钟信号列表（不含 new_signal）
+        atr_ratio: Optional[float] = None,   # 当前 ATR / 20-period ATR 中位数；None = 未知
+        trend_high_ratio: Optional[float] = None,
+        trend_low_ratio: Optional[float] = None,
+        conflict_window_min: Optional[int] = None,
+    ) -> Optional[str]:
+        """Constitution §3 跨策略冲突过滤
+
+        检查 new_signal 是否应该被 Constitution 过滤。三条规则：
+
+        规则 1：方向冲突 — 同 symbol 在 conflict_window_min 内有反向策略信号
+                → 保留 confidence 高的；相等时 trend_follow (A) 优先于 mean_reversion (B)
+
+        规则 2：趋势动能过强 — atr_ratio ≥ trend_high_ratio
+                → 屏蔽 mean_reversion 策略（B 在强趋势里反转会被甩）
+
+        规则 3：窄幅震荡 — atr_ratio ≤ trend_low_ratio
+                → 屏蔽 trend_follow 策略（A 在震荡里假突破多）
+
+        策略 C / D 不受规则 2/3 影响（volatility / funding 各自独立判定）。
+
+        :param new_signal: 待检查的 Signal 对象
+        :param recent_signals: 同一 symbol 的最近 N 分钟历史信号列表
+        :param atr_ratio: 当前 ATR / 20-period ATR 中位数；None 时规则 2/3 不触发
+        :param trend_high_ratio: 强趋势阈值（默认 1.5）
+        :param trend_low_ratio: 窄幅阈值（默认 0.7）
+        :param conflict_window_min: 冲突时间窗口（默认 60 分钟）
+        :return: None = 通过；str = 拒绝原因
+        """
+        if new_signal is None:
+            return None
+
+        high_th = trend_high_ratio if trend_high_ratio is not None else self.DEFAULT_TREND_HIGH_RATIO
+        low_th = trend_low_ratio if trend_low_ratio is not None else self.DEFAULT_TREND_LOW_RATIO
+        window_min = conflict_window_min if conflict_window_min is not None else self.DEFAULT_CONFLICT_WINDOW_MIN
+
+        new_strategy = getattr(new_signal, "strategy", None)
+        new_regime = self.STRATEGY_REGIME.get(new_strategy)
+
+        # ── 规则 2：强趋势 → 屏蔽 B (mean_reversion) ──
+        if atr_ratio is not None and atr_ratio >= high_th and new_regime == "mean_reversion":
+            return (
+                f"Constitution §3 规则 2：强趋势 (ATR/median={atr_ratio:.2f} ≥ {high_th}) "
+                f"屏蔽 {new_strategy} 反转信号 — 趋势里反转易被甩"
+            )
+
+        # ── 规则 3：窄幅震荡 → 屏蔽 A (trend_follow) ──
+        if atr_ratio is not None and atr_ratio <= low_th and new_regime == "trend_follow":
+            return (
+                f"Constitution §3 规则 3：窄幅震荡 (ATR/median={atr_ratio:.2f} ≤ {low_th}) "
+                f"屏蔽 {new_strategy} 突破信号 — 震荡里假突破多"
+            )
+
+        # ── 规则 1：同 symbol 反向策略冲突 ──
+        # C / D 不参与冲突比较（独立判定，不互斥）
+        if new_regime not in ("trend_follow", "mean_reversion"):
+            return None
+
+        # 按 kline_time 过滤窗口
+        try:
+            new_ts = self._parse_kline_time(getattr(new_signal, "kline_time", None))
+        except Exception:
+            new_ts = None
+
+        for prev in recent_signals:
+            if prev is None:
+                continue
+            prev_strategy = getattr(prev, "strategy", None)
+            prev_regime = self.STRATEGY_REGIME.get(prev_strategy)
+            # 只比较 A↔B (trend_follow ↔ mean_reversion)
+            if prev_regime not in ("trend_follow", "mean_reversion"):
+                continue
+            # 必须 regime 互补（趋势 vs 反转）+ 方向相反
+            if prev_regime == new_regime:
+                continue
+            if getattr(prev, "direction", None) == getattr(new_signal, "direction", None):
+                continue
+            # 时间窗口检查
+            if new_ts is not None:
+                try:
+                    prev_ts = self._parse_kline_time(getattr(prev, "kline_time", None))
+                except Exception:
+                    prev_ts = None
+                if prev_ts is not None and abs((new_ts - prev_ts).total_seconds()) > window_min * 60:
+                    continue
+            # 进入冲突：旧信号已下单，新信号被拒绝（避免多空互殴）
+            new_conf = getattr(new_signal, "confidence", 0.0)
+            prev_conf = getattr(prev, "confidence", 0.0)
+            if new_conf > prev_conf:
+                verdict = "新信号 conf 更高"
+            else:
+                verdict = "新信号 conf 不占优"
+            return (
+                f"Constitution §3 规则 1：同 symbol 反向冲突 — "
+                f"拒绝新信号 {new_strategy} {new_signal.direction} (conf={new_conf:.2f})，"
+                f"保留旧信号 {prev_strategy} {prev.direction} (conf={prev_conf:.2f}) "
+                f"[{verdict}，避免多空互弒]"
+            )
+
+        return None
+
+    @staticmethod
+    def _parse_kline_time(ts_str):
+        """解析 kline_time 字符串为 timezone-aware datetime。失败返回 None。
+
+        支持 ISO 8601 with 'Z' suffix 或 timezone offset。
+        """
+        if not ts_str:
+            return None
+        from datetime import datetime, timezone
+        s = str(ts_str).strip()
+        # 替换 Z 为 +00:00
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            return None
+
     def estimate_fee(self, price: float, size: float, ct_val: float = 1.0, taker: bool = True) -> float:
         """
         估算手续费

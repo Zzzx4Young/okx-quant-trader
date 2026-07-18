@@ -49,6 +49,42 @@ class TestStrategyResolve:
             fs.resolve_strategy("Z_NOT_EXIST")
 
 
+class TestCalibrationDefaults:
+    """Phase 6.2 摩擦回写：从 config.risk.calibration 读取 Gate 7 实测值"""
+
+    def test_load_calibration_returns_empty_when_no_config(self, tmp_path, monkeypatch):
+        """config.json 缺失时返回空 dict，不报错"""
+        import okx.scripts.fragility_scan as fs
+        # 模拟 _PROJECT_ROOT 指向 tmp_path（不存在 state/config.json）
+        monkeypatch.setattr(fs, "_PROJECT_ROOT", tmp_path)
+        result = fs.load_calibration_defaults()
+        assert result == {}
+
+    def test_load_calibration_returns_calibration_block(self, monkeypatch, tmp_path):
+        """正常路径：返回 risk.calibration 子树"""
+        import okx.scripts.fragility_scan as fs
+        cfg = {
+            "risk": {
+                "calibration": {
+                    "real_measured_taker_slippage_bps": 5.42,
+                    "real_measured_taker_fee_bps": 5.0,
+                    "sample_size": 50,
+                }
+            }
+        }
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text("ignored")  # placeholder; real cfg loaded below
+        # 模拟使用真实 config.json 路径
+        real_cfg = tmp_path / "okx" / "state" / "config.json"
+        real_cfg.parent.mkdir(parents=True, exist_ok=True)
+        real_cfg.write_text(__import__("json").dumps(cfg))
+        monkeypatch.setattr(fs, "_PROJECT_ROOT", tmp_path)
+        result = fs.load_calibration_defaults()
+        assert result["real_measured_taker_slippage_bps"] == 5.42
+        assert result["real_measured_taker_fee_bps"] == 5.0
+        assert result["sample_size"] == 50
+
+
 class TestParseLists:
     def test_int_list(self):
         assert fs.parse_int_list("5,10,15,20") == [5, 10, 15, 20]

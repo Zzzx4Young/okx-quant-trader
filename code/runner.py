@@ -15,7 +15,8 @@ OKX 交易工作流执行器 (Runner)
 import time
 import os
 import logging
-from datetime import datetime, timezone
+from collections import deque
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import get_config
@@ -57,6 +58,10 @@ class Runner:
         else:
             env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
             self._notifier = TelegramNotifier.from_env(env_path) if self._config.notifier_enabled else NoopNotifier()
+
+        # Constitution §3 跨策略冲突过滤：按 symbol 维护最近信号窗口
+        # 用于 A↔B 同 symbol 反向信号的时间窗口检测（默认 60 分钟）
+        self._recent_signals: Dict[str, deque] = {}
 
     def run(self) -> Dict[str, Any]:
         """
@@ -288,6 +293,104 @@ class Runner:
 
         return None
 
+    # ─────────────────────────────────────────────────────────────
+    # Constitution §3 跨策略冲突过滤 helper
+    # ─────────────────────────────────────────────────────────────
+
+    def _get_recent_signals(self, symbol: str) -> list:
+        """返回同 symbol 在 conflict_window_min 内的历史信号。
+
+        自动丢弃过期信号并重构 deque（仅在有过期项时重构，避免热点路径开销）。
+        """
+        if symbol not in self._recent_signals:
+            return []
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            minutes=self._risk.DEFAULT_CONFLICT_WINDOW_MIN
+        )
+        result = []
+        expired = 0
+        for sig in self._recent_signals[symbol]:
+            try:
+                sig_ts = self._risk._parse_kline_time(getattr(sig, "kline_time", None))
+                if sig_ts is None or sig_ts >= cutoff:
+                    result.append(sig)
+                else:
+                    expired += 1
+            except Exception:
+                result.append(sig)
+        if expired > 0:
+            self._recent_signals[symbol] = deque(result, maxlen=100)
+        return result
+
+    def _record_signal(self, signal) -> None:
+        """记录信号到最近窗口。None 信号忽略。
+
+        调用时机：signal 成功下单后（不记录被拒绝的信号）。
+        """
+        if signal is None:
+            return
+        sym = getattr(signal, "symbol", None)
+        if not sym:
+            return
+        if sym not in self._recent_signals:
+            self._recent_signals[sym] = deque(maxlen=100)
+        self._recent_signals[sym].append(signal)
+
+    def _get_atr_ratio(self, symbol: str) -> Optional[float]:
+        """计算 current_ATR / median_ATR 比值（衡量趋势/震荡动能）。
+
+        返回 None 时表示数据不足或计算失败（调用方应跳过规则 2/3）。
+        """
+        try:
+            timeframe = self._config.timeframe
+            candles = self._client.market.get_candles(symbol, bar=timeframe, limit=20)
+            if not candles or len(candles) < 15:
+                return None
+            atr_period = 14
+            trs = []
+            for i in range(1, len(candles)):
+                high = float(candles[i][2])
+                low = float(candles[i][3])
+                prev_close = float(candles[i - 1][4])
+                tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+                trs.append(tr)
+            if len(trs) < atr_period:
+                return None
+            atr_values = []
+            for i in range(atr_period - 1, len(trs)):
+                window = trs[i - atr_period + 1:i + 1]
+                atr_values.append(sum(window) / atr_period)
+            if not atr_values:
+                return None
+            current_atr = atr_values[-1]
+            sorted_atrs = sorted(atr_values)
+            n = len(sorted_atrs)
+            if n % 2 == 0:
+                median_atr = (sorted_atrs[n // 2 - 1] + sorted_atrs[n // 2]) / 2
+            else:
+                median_atr = sorted_atrs[n // 2]
+            if median_atr <= 0:
+                return None
+            return current_atr / median_atr
+        except Exception as e:
+            logger.warning(f"计算 ATR ratio 失败 [{symbol}]: {e}")
+            return None
+
+    def _strategy_conflict_check(self, signal) -> Optional[str]:
+        """Constitution §3 跨策略冲突过滤包装（调用 risk.check_strategy_conflict）。
+
+        顺序：先做跨策略 A↔B 冲突检查 → 再做不确定性决策树检查。
+        """
+        if signal is None:
+            return None
+        recent = self._get_recent_signals(signal.symbol)
+        atr_ratio = self._get_atr_ratio(signal.symbol)
+        return self._risk.check_strategy_conflict(
+            new_signal=signal,
+            recent_signals=recent,
+            atr_ratio=atr_ratio,
+        )
+
     def _process_signal(self, signal: Signal) -> Dict[str, Any]:
         """
         处理单个信号：风控计算 → 下单 → 更新状态 → 记录日志
@@ -299,6 +402,14 @@ class Runner:
             "signal": signal.to_dict(),
             "status": "pending",
         }
+
+        # ── Constitution §3 跨策略冲突过滤 (A↔B) ──
+        strategy_conflict_reason = self._strategy_conflict_check(signal)
+        if strategy_conflict_reason:
+            result["status"] = "rejected"
+            result["reason"] = strategy_conflict_reason
+            logger.info(f"信号被跨策略冲突过滤拒绝: {strategy_conflict_reason}")
+            return result
 
         # ── 不确定性决策树 (Constitution §3) ──
         conflict_reason = self._conflict_check(signal)
@@ -430,6 +541,9 @@ class Runner:
         }
 
         self._portfolio.add_position(position_record)
+
+        # Constitution §3：记录信号到最近窗口（供后续信号做跨策略冲突检查）
+        self._record_signal(signal)
 
         # ── 记录开仓日志 ──
         fee = self._risk.estimate_fee(

@@ -17,22 +17,7 @@ import pytest
 
 from okx.code.config import Config, get_config
 
-# 项目根目录的相对路径（避免硬编码用户名/机器路径）
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_REAL_CFG = _PROJECT_ROOT / "state" / "config.json"
-
-
-@pytest.fixture
-def cfg(tmp_path):
-    """从真实 config.json 加载"""
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    test_cfg = state_dir / "config.json"
-    test_cfg.write_text(_REAL_CFG.read_text())
-
-    Config._instance = None
-    c = Config(str(test_cfg))
-    return c
+# cfg fixture 由 conftest.py 提供（共享）
 
 
 class TestConstitutionConfig:
@@ -54,16 +39,19 @@ class TestConstitutionConfig:
         assert cfg.strategy_d_funding_extreme_threshold == 0.0001
 
     def test_leverage_matrix_btc(self, cfg):
+        """v1.8.1 阶段 5.2: 锁杠杆 3x (路线图 micro-live 要求)"""
         btc = cfg.leverage_matrix_btc
-        assert btc["min_leverage"] == 5
-        assert btc["max_leverage"] == 10
+        assert btc["min_leverage"] == 3
+        assert btc["max_leverage"] == 3
         assert btc["hard_ceiling"] == 3
         assert btc["category"] == "mainstream"
 
     def test_leverage_matrix_eth(self, cfg):
+        """v1.8.1 阶段 5.2: 锁杠杆 3x (路线图 micro-live 要求)"""
         eth = cfg.leverage_matrix_eth
-        assert eth["min_leverage"] == 5
-        assert eth["max_leverage"] == 10
+        assert eth["min_leverage"] == 3
+        assert eth["max_leverage"] == 3
+        assert eth["hard_ceiling"] == 3
 
     def test_leverage_matrix_altcoin(self, cfg):
         alt = cfg.leverage_matrix_altcoin
@@ -71,9 +59,9 @@ class TestConstitutionConfig:
         assert alt["max_leverage"] == 5
 
     def test_get_leverage_matrix_for_symbol(self, cfg):
-        """根据 symbol 选择对应矩阵"""
-        assert cfg.get_leverage_matrix_for_symbol("BTC-USDT-SWAP")["min_leverage"] == 5
-        assert cfg.get_leverage_matrix_for_symbol("ETHUSDT")["min_leverage"] == 5
+        """根据 symbol 选择对应矩阵（v1.8.1 BTC/ETH 均锁 3x）"""
+        assert cfg.get_leverage_matrix_for_symbol("BTC-USDT-SWAP")["min_leverage"] == 3
+        assert cfg.get_leverage_matrix_for_symbol("ETHUSDT")["min_leverage"] == 3
         assert cfg.get_leverage_matrix_for_symbol("SOL-USDT-SWAP")["max_leverage"] == 5
         assert cfg.get_leverage_matrix_for_symbol("DOGE-USDT-SWAP")["max_leverage"] == 5
 
@@ -92,17 +80,18 @@ class TestRiskDynamicLeverage:
     """risk.py 动态杠杆矩阵"""
 
     def test_default_leverage_btc_uses_matrix(self, cfg):
+        """v1.8.1 阶段 5.2: BTC 默认锁 3x"""
         from okx.code.risk import RiskCalculator
         risk = RiskCalculator(cfg)
-        # 无 ATR 上下文时，使用 min_leverage (5)
         lev = risk._get_default_leverage("BTCUSDT")
-        assert lev == 5
+        assert lev == 3
 
     def test_default_leverage_eth_uses_matrix(self, cfg):
+        """v1.8.1 阶段 5.2: ETH 默认锁 3x"""
         from okx.code.risk import RiskCalculator
         risk = RiskCalculator(cfg)
         lev = risk._get_default_leverage("ETHUSDT")
-        assert lev == 5
+        assert lev == 3
 
     def test_default_leverage_altcoin(self, cfg):
         from okx.code.risk import RiskCalculator
@@ -111,20 +100,20 @@ class TestRiskDynamicLeverage:
         assert lev == 3  # 山寨币 min_leverage
 
     def test_calculate_dynamic_leverage_high_atr(self, cfg):
-        """高 ATR → 用 min_leverage"""
+        """高 ATR → 用 min_leverage（v1.8.1 锁 3x）"""
         from okx.code.risk import RiskCalculator
         risk = RiskCalculator(cfg)
         # BTC atr_high = 250，传 300（高于 atr_high）→ 返回 min_lev
         lev = risk.calculate_dynamic_leverage("BTCUSDT", current_atr=300)
-        assert lev == 5
+        assert lev == 3
 
     def test_calculate_dynamic_leverage_low_atr(self, cfg):
-        """低 ATR → 用 max_leverage"""
+        """低 ATR → 用 max_leverage（v1.8.1 锁 3x）"""
         from okx.code.risk import RiskCalculator
         risk = RiskCalculator(cfg)
         # BTC atr_low = 80，传 50（低于 atr_low）→ 返回 max_lev
         lev = risk.calculate_dynamic_leverage("BTCUSDT", current_atr=50)
-        assert lev == 10
+        assert lev == 3
 
     def test_calculate_dynamic_leverage_major_event(self, cfg):
         """重大事件 → 硬性熔断到 hard_ceiling"""
@@ -215,8 +204,8 @@ class TestMarketFilter:
 class TestConfigVersion:
     """config.json 版本升级到 1.1.0"""
 
-    def test_config_version(self):
-        cfg = json.load(open(_REAL_CFG))
+    def test_config_version(self, real_config_dict):
+        cfg = real_config_dict
         assert cfg["version"] == "1.1.0"
         assert cfg["updated_at"] == "2026-07-11"
         assert cfg["strategy_b"]["enabled"] is True

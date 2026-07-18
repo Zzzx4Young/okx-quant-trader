@@ -17,7 +17,6 @@
 - SL 优先于 TP 同 bar 冲突（保守派原则）
 - Trade 全生命周期：fills 列表记录 entry + tp_1/2/3 + sl/exit 每笔成交
 
-参考设计：`okx/code/reference/matcher.py`
 依赖文档：`okx/docs/backtest_system_design_report_V2.1.md`
 """
 

@@ -72,6 +72,23 @@ def resolve_strategy(name: str) -> str:
     return resolved
 
 
+def load_calibration_defaults() -> Dict[str, object]:
+    """从 state/config.json risk.calibration 加载 Gate 7 实测成本数据。
+
+    返回 dict 可能为空（配置缺失时）。调用方应以此作为未指定 --slippage-bps
+    / --fee-bps 时的 fallback 默认值。
+    """
+    config_path = _PROJECT_ROOT / "okx" / "state" / "config.json"
+    if not config_path.exists():
+        return {}
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data.get("risk", {}).get("calibration", {}) or {}
+
+
 def parse_float_list(s: str) -> List[float]:
     """解析 '5,10,15' 或 '5.5,7.0' → [5.0, 10.0, 15.0]"""
     return [float(x.strip()) for x in s.split(",") if x.strip()]
@@ -400,10 +417,10 @@ def main():
     parser.add_argument("--symbol", required=True,
                         help="标的，如 BTC-USDT-SWAP")
     parser.add_argument("--bar", default="1h", help="K 线周期（默认 1h）")
-    parser.add_argument("--slippage-bps", required=True,
-                        help="滑点扫描列表，逗号分隔，如 5,10,15,20")
-    parser.add_argument("--fee-bps", required=True,
-                        help="手续费扫描列表，逗号分隔，如 4.5,5.5,7.0,8.5")
+    parser.add_argument("--slippage-bps", default=None,
+                        help="滑点扫描列表，逗号分隔，如 5,10,15,20。缺省 = config.risk.calibration.real_measured_taker_slippage_bps 士 [lower, value, upper]")
+    parser.add_argument("--fee-bps", default=None,
+                        help="手续费扫描列表，逗号分隔，如 4.5,5.5,7.0,8.5。缺省 = config.risk.calibration.real_measured_taker_fee_bps 单点")
     parser.add_argument("--leverage", type=int, default=5, help="杠杆（默认 5x）")
     parser.add_argument("--capital", type=float, default=10000.0, help="初始资金")
     parser.add_argument("--buy-hold-ret", type=float, default=None,
@@ -415,8 +432,34 @@ def main():
     args = parser.parse_args()
 
     strategy_full = resolve_strategy(args.strategy)
-    slippage_bps_list = parse_int_list(args.slippage_bps)
-    fee_bps_list = parse_float_list(args.fee_bps)
+
+    # ─── 摩擦参数 fallback：明示 args 优先，否则从 config.risk.calibration 读取 ───
+    calib = load_calibration_defaults()
+    if args.slippage_bps is None:
+        measured = calib.get("real_measured_taker_slippage_bps")
+        if measured is None:
+            parser.error(
+                "缺少 --slippage-bps 且 config.risk.calibration.real_measured_taker_slippage_bps 未配置；"
+                "请明确指定或先跑 diagnose_okx_demo.py (Phase 4 Gate 7) 校准"
+            )
+        # 滑点生成 3 点网格 [60%, 100%, 150%] × measured，保留上下探测带
+        slippage_bps_list = [max(1, int(round(measured * 0.6))), int(round(measured)), int(round(measured * 1.5))]
+        print(f"🔧 slippage_bps 未指定，使用 calibration：{slippage_bps_list}（{measured} bps ± 上下探测）")
+    else:
+        slippage_bps_list = parse_int_list(args.slippage_bps)
+
+    if args.fee_bps is None:
+        measured = calib.get("real_measured_taker_fee_bps")
+        if measured is None:
+            parser.error(
+                "缺少 --fee-bps 且 config.risk.calibration.real_measured_taker_fee_bps 未配置；"
+                "请明确指定或先跑 diagnose_okx_demo.py (Phase 4 Gate 7) 校准"
+            )
+        # 费率 1 点（实测）；后续 Phase 5 实盘可加 ±探测
+        fee_bps_list = [float(measured)]
+        print(f"🔧 fee_bps 未指定，使用 calibration：{fee_bps_list}（{measured} bps 单点）")
+    else:
+        fee_bps_list = parse_float_list(args.fee_bps)
 
     if not slippage_bps_list or not fee_bps_list:
         raise SystemExit("❌ --slippage-bps 和 --fee-bps 必须至少各 1 个值")

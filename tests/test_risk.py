@@ -308,9 +308,9 @@ def test_estimate_fee_maker(risk):
 # ──────────── _get_default_leverage ────────────
 
 def test_default_leverage_whitelist(risk):
-    """白名单内交易对用主杠杆（兼容 BTC-USDT-SWAP 等带分隔符形式）"""
+    """白名单内交易对用主杠杆（v1.8.1 阶段 5.2 锁 3x）"""
     lev = risk._get_default_leverage("BTCUSDT")
-    assert lev == 5  # config.json 的 default_leverage_main
+    assert lev == 3  # v1.8.1 锁锁锁锁 3x
 
 
 def test_default_leverage_non_whitelist(risk):
@@ -322,27 +322,27 @@ def test_default_leverage_non_whitelist(risk):
 # ──────────── 集成场景 ────────────
 
 def test_full_workflow_simulation(risk):
-    """模拟一次完整风控：开仓 → 止损距离合理 → 净 RR 通过"""
+    """模拟一次完整风控：开仓 → 止损距离合理 → 净 RR 通过（v1.8.1 锁 3x）"""
     result = risk.calculate_position_size(
         symbol="BTCUSDT", direction="long",
-        entry_price=60000.0, available_balance=10000.0, leverage=5,
+        entry_price=60000.0, available_balance=10000.0, leverage=3,
     )
     # 1. 通过
     assert result.passed is True
-    # 2. 仓位大小：2% 风险 = 200 USDT；sl_distance ≈ 0.5%
-    #    max_size = 200 / (60000 * 0.005) = 0.667 张
-    assert 0.6 < result.max_size < 0.7
-    # 3. 保证金 = 0.667 * 60000 / 5 = 8000 USDT（< 10000 余额）
+    # 2. 仓位大小：1% 风险 = 100 USDT；sl_distance ≈ 0.5%
+    #    max_size = 100 / (60000 * 0.005) = 0.333 张
+    assert 0.3 < result.max_size < 0.4
+    # 3. 保证金 = 0.333 * 60000 / 3 = 6666 USDT（< 10000 余额）
     assert result.max_margin < 10000.0
     # 4. 净盈亏比 ≥ 1.5
     assert result.reward_risk_ratio >= 1.5
 
 
 def test_different_symbols_different_leverage(risk, cfg):
-    """非白名单交易对杠杆更保守"""
-    cfg._data["trading"]["default_leverage_main"] = 5
+    """非白名单交易对杠杆更保守（v1.8.1 锁 3x）"""
+    cfg._data["trading"]["default_leverage_main"] = 3
     cfg._data["trading"]["whitelist_symbols"] = ["BTCUSDT"]
     lev_btc = risk._get_default_leverage("BTCUSDT")
     lev_doge = risk._get_default_leverage("DOGEUSDT")
-    assert lev_btc == 5
+    assert lev_btc == 3
     assert lev_doge == 3
