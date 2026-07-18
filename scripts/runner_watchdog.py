@@ -327,9 +327,34 @@ def send_telegram_alert(
         lines.append(f"⏰ {_now_utc().strftime('%Y-%m-%d %H:%M:%S UTC')}")
         text = "\n".join(lines)
 
+    # ──────────────────────────────────────────────────────────
+    # 5.3 本地 fallback log（Telegram 挂了也不丢 critical）
+    # — 总是先写盘，即使 Telegram send 完美也会是 source-of-truth
+    # — 22:41 SSL EOF 教训：仅 Telegram 单点交付不安全
+    # ──────────────────────────────────────────────────────────
+    # 5.3 fallback log 路径推导：parents[1] 指向 okx/根（parents[2] 是 workspace）
+    fallback_path = None
+    if "workspace_root" in dir() and workspace_root is not None:
+        fallback_path = workspace_root / "okx" / "state" / "alerts" / "critical.log"
+    if fallback_path is None:
+        fallback_path = (Path(__file__).resolve().parents[1] / "state" / "alerts" / "critical.log")
+    try:
+        fallback_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(fallback_path, "a", encoding="utf-8") as f:
+            f.write(f"\n=== {_now_utc().isoformat()} mode={mode} ===\n")
+            f.write(text)
+            f.write("\n")
+    except Exception as e:
+        logger.warning(f"fallback log 写入失败: {e}")
+
     # dedup_key：同 issue 内容 5 分钟不重复发
     dedup_key = "|".join(f"{_get_issue(i, 'check')}:{_get_issue(i, 'message')}" for i in critical)
-    return notifier.notify_error(text, dedup_key=dedup_key)
+    try:
+        return notifier.notify_error(text, dedup_key=dedup_key)
+    except Exception as e:
+        # Telegram 挂了 → fallback log 已经在上面已写
+        logger.warning(f"Telegram 发送异常（fallback log 已存盘）: {e}")
+        return False
 
 
 def write_log(
