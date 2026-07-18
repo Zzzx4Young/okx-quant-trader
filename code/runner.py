@@ -391,6 +391,90 @@ class Runner:
             atr_ratio=atr_ratio,
         )
 
+    def _kelly_sizing_decision(
+        self,
+        signal,
+        equity: float,
+    ) -> tuple:
+        """
+        Constitution §3.2 Kelly Criterion 动态仓位决策 thin wrapper (v1.8.2).
+
+        顺序：在 §3 跨策略冲突检查 + 不确定性决策树检查之后,
+        获取余额后、调 calculate_position_size 之前.
+
+        收集 inputs:
+          - strategy_stats: 从 self._portfolio.get_strategy_stats(signal.strategy) 聚合
+          - atr_ratio: 从 self._get_atr_ratio(signal.symbol) 取
+          - leverage: signal.leverage 或 risk._get_default_leverage(symbol)
+          - sl_distance_pct: config.sl_buffer_percent / 100 (默认 0.5%)
+          - min_trades_for_kelly: config.kelly.min_trades_for_kelly (默认 30)
+
+        调用 self._risk.kelly_sizing_decision() 返回 (status, max_loss_pct, reason).
+        runner 根据 status 决定:
+          - "fallback_max_loss_pct": 用 config 默认 1% 本金
+          - "reject_negative_ev": 拒绝开仓
+          - "kelly_active": 临时覆盖 config.max_loss_percent_per_trade 为 max_loss_pct
+
+        :param signal: Signal 对象
+        :param equity: 账户可用余额 (USDT)
+        :return: (status, max_loss_pct_or_None, reason)
+        """
+        if signal is None:
+            return ("fallback_max_loss_pct", None, "no_signal_in_runner_kelly")
+
+        # ── 拉 strategy stats ──
+        strategy_stats = None
+        if self._portfolio is not None:
+            try:
+                strategy_stats = self._portfolio.get_strategy_stats(signal.strategy)
+            except Exception as e:
+                logger.warning(f"拉取 strategy stats 失败 [{signal.strategy}]: {e}")
+
+        # ── 拉 atr_ratio (跟 §3 跨策略冲突过滤共用) ──
+        atr_ratio = self._get_atr_ratio(signal.symbol)
+
+        # ── 拉 leverage (signal.leverage 优先) ──
+        leverage = signal.leverage
+        if not leverage:
+            try:
+                leverage = self._risk._get_default_leverage(signal.symbol)
+            except Exception:
+                leverage = 3  # v1.8.1 默认锁 = 3x
+
+        # ── 拉 min_trades_for_kelly (default 30) ──
+        min_trades = 30
+        try:
+            kelly_cfg = self._risk._config.kelly
+            if isinstance(kelly_cfg, dict):
+                min_trades = kelly_cfg.get("min_trades_for_kelly", 30)
+        except Exception:
+            pass
+
+        # ── 拉 sl_distance_pct (默认 = config.sl_buffer_percent / 100) ──
+        sl_distance_pct = 0.005
+        try:
+            sl_buffer = getattr(self._risk._config, "sl_buffer_percent", 0.5)
+            sl_distance_pct = float(sl_buffer) / 100.0
+            if sl_distance_pct <= 0:
+                sl_distance_pct = 0.005
+        except Exception:
+            pass
+
+        # ── 委托给 risk.kelly_sizing_decision 纯决策包装 ──
+        try:
+            return self._risk.kelly_sizing_decision(
+                strategy_stats=strategy_stats,
+                equity=equity,
+                atr_ratio=atr_ratio,
+                leverage=int(leverage) if leverage else 3,
+                sl_distance_pct=sl_distance_pct,
+                min_trades_for_kelly=int(min_trades),
+            )
+        except Exception as e:
+            # 任何 Kelly 计算异常 → 默认路径 (fallback)
+            logger.warning(f"Kelly 决策异常 [{signal.strategy}/{signal.symbol}]: {e}")
+            return ("fallback_max_loss_pct", None, f"kelly_decision_error_fallback|{type(e).__name__}")
+
     def _process_signal(self, signal: Signal) -> Dict[str, Any]:
         """
         处理单个信号：风控计算 → 下单 → 更新状态 → 记录日志
@@ -440,14 +524,65 @@ class Runner:
             result["error"] = f"可用余额不足: {usdt_balance}"
             return result
 
-        # ── 风控计算仓位 ──
-        risk_result = self._risk.calculate_position_size(
-            symbol=signal.symbol,
-            direction=signal.direction,
-            entry_price=signal.entry_price,
-            available_balance=usdt_balance,
-            leverage=signal.leverage,
+        # ── Constitution §3.2 Kelly Criterion 动态仓位决策 (v1.8.2) ──
+        kelly_status, kelly_max_loss_pct, kelly_reason = self._kelly_sizing_decision(
+            signal=signal,
+            equity=usdt_balance,
         )
+        if kelly_status == "reject_negative_ev":
+            result["status"] = "rejected"
+            result["reason"] = kelly_reason
+            logger.info(f"信号被 Kelly 拒绝 (negative EV): {kelly_reason}")
+            return result
+
+        # ── Kelly 调整 max_loss_pct (临时改 risk config, 计算后还原) ──
+        original_max_loss_pct = self._risk._config.max_loss_percent_per_trade
+        kelly_applied = False
+        if (
+            kelly_status == "kelly_active"
+            and kelly_max_loss_pct is not None
+            and kelly_max_loss_pct < original_max_loss_pct - 1e-9
+        ):
+            self._risk._config.max_loss_percent_per_trade = kelly_max_loss_pct
+            kelly_applied = True
+            logger.info(
+                f"Kelly: {signal.strategy}/{signal.symbol} max_loss_pct "
+                f"{original_max_loss_pct:.3f}% -> {kelly_max_loss_pct:.3f}% "
+                f"({kelly_reason})"
+            )
+            result["kelly_decision"] = {
+                "status": kelly_status,
+                "applied_max_loss_pct": kelly_max_loss_pct,
+                "reason": kelly_reason,
+            }
+        elif kelly_status == "kelly_active":
+            # kelly wants ≥ hard_cap (已是 hard_cap 边缘), 不改 config
+            result["kelly_decision"] = {
+                "status": kelly_status,
+                "applied_max_loss_pct": kelly_max_loss_pct,
+                "reason": kelly_reason + "|not_applied_pct_>=_hard_cap",
+            }
+        else:
+            # fallback_max_loss_pct → caller 用 config 默认 1%
+            result["kelly_decision"] = {
+                "status": kelly_status,
+                "applied_max_loss_pct": original_max_loss_pct,
+                "reason": kelly_reason,
+            }
+
+        try:
+            # ── 风控计算仓位 ──
+            risk_result = self._risk.calculate_position_size(
+                symbol=signal.symbol,
+                direction=signal.direction,
+                entry_price=signal.entry_price,
+                available_balance=usdt_balance,
+                leverage=signal.leverage,
+            )
+        finally:
+            # 还原 config.max_loss_percent_per_trade (避免污染同 runner 后续信号)
+            if kelly_applied:
+                self._risk._config.max_loss_percent_per_trade = original_max_loss_pct
 
         result["risk"] = {
             "max_size": risk_result.max_size,

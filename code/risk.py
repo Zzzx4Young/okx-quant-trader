@@ -352,6 +352,86 @@ class RiskCalculator:
 
         return size_usd, " | ".join(reason_parts)
 
+    def kelly_sizing_decision(
+        self,
+        strategy_stats,  # Optional[StrategyStats from code.portfolio] - duck typed
+        equity: float,
+        atr_ratio: Optional[float],
+        leverage: int,
+        sl_distance_pct: float,
+        min_trades_for_kelly: int,
+    ) -> tuple[str, Optional[float], str]:
+        """
+        Kelly Criterion 纯决策包装 (Constitution §3.2, v1.8.2 runner 集成).
+
+        把 Kelly 计算结果转换为 runner 可直接使用的 (status, max_loss_pct).
+
+        返回 (status, max_loss_pct, reason):
+          - "fallback_max_loss_pct": 数据不足 (n < min_trades_for_kelly 或 stats 是 None)
+              → max_loss_pct = None (caller 走默认 hard cap 路径)
+          - "reject_negative_ev": Kelly 期望值为负 → max_loss_pct = None (caller 拒绝开仓)
+          - "kelly_active": Kelly 给了一个合理 sizing 决策
+              → max_loss_pct: float = Kelly 决定的 max_loss_pct (不破 hard cap)
+
+        输入 contract:
+          - strategy_stats: duck-typed, 必须含 .n/.win_rate/.avg_win_usd/.avg_loss_usd
+                            传 None 表示无历史
+          - equity: 当前账户净值 (USDT)
+          - atr_ratio: 当前 ATR / 中位数 (None → 1.0)
+          - leverage: 杠杆倍数
+          - sl_distance_pct: 止损距离 (0.005 = 0.5%)
+          - min_trades_for_kelly: 启用 Kelly 需最小历史 trade 数
+        """
+        # ── 数据不足 fallback ──
+        if strategy_stats is None:
+            return (
+                "fallback_max_loss_pct",
+                None,
+                "fallback_no_strategy_history",
+            )
+        if strategy_stats.n < min_trades_for_kelly:
+            return (
+                "fallback_max_loss_pct",
+                None,
+                f"fallback_n_{strategy_stats.n}_below_min_{min_trades_for_kelly}",
+            )
+
+        # ── 调 calculate_kelly_size ──
+        kelly_size_usd, kelly_reason = self.calculate_kelly_size(
+            win_rate=strategy_stats.win_rate,
+            avg_win=strategy_stats.avg_win_usd,
+            avg_loss=strategy_stats.avg_loss_usd,
+            current_atr_ratio=atr_ratio if atr_ratio is not None else 1.0,
+            current_equity=equity,
+            leverage=leverage,
+            sl_distance_pct=sl_distance_pct,
+        )
+
+        # ── Negative EV 拒绝 ──
+        if kelly_size_usd == 0:
+            return (
+                "reject_negative_ev",
+                None,
+                f"kelly_reject|{kelly_reason}",
+            )
+
+        # ── Kelly 给的 size_usd → 换算成 max_loss_pct ──
+        hard_cap_pct = self._config.max_loss_percent_per_trade
+        raw_pct = (kelly_size_usd / equity) * 100.0
+
+        if raw_pct > hard_cap_pct:
+            capped_pct = hard_cap_pct
+            cap_note = "|capped_to_hard_cap"
+        else:
+            capped_pct = raw_pct
+            cap_note = ""
+
+        return (
+            "kelly_active",
+            capped_pct,
+            f"kelly_active|{kelly_reason}{cap_note}",
+        )
+
     def validate_leverage(self, leverage: int, symbol: str) -> tuple[bool, str]:
         """
         校验杠杆是否合法

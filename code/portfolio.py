@@ -14,7 +14,20 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
+
+
+class StrategyStats(NamedTuple):
+    """策略历史统计 (Kelly Criterion sizing 决策输入, Constitution §3.2).
+
+    由 Portfolio.get_strategy_stats() 返回。
+    用于在 runner 里动态决定单笔仓位 size (而非默认 1% 本金)。
+    """
+    strategy: str          # strategy 名 (e.g. "BB_RSI_REVERSION")
+    n: int                 # closed_trades count for this strategy
+    win_rate: float        # wins / n (0.0-1.0)
+    avg_win_usd: float     # 平均盈利笔 pnl (USD, 正数; 0 表示该策略从未盈利过)
+    avg_loss_usd: float    # 平均亏损笔 |pnl| (USD, 正数; 0 表示该策略从未亏损过)
 
 
 class Portfolio:
@@ -241,6 +254,52 @@ class Portfolio:
         with self._lock:
             self._ensure_daily_reset()
             return dict(self._data["daily_stats"])
+
+    def get_strategy_stats(self, strategy: str) -> Optional[StrategyStats]:
+        """
+        聚合策略历史统计 (Constitution §3.2 Kelly Criterion 决策输入, v1.8.2).
+
+        从 closed_positions 过滤指定 strategy 的已平仓记录, 计算:
+        - n: 该策略已平仓笔数
+        - win_rate: 盈利笔数 / n (0.0-1.0)
+        - avg_win_usd: 盈利笔平均 pnl (USD, 正数; 0 = 该策略从未盈利)
+        - avg_loss_usd: 亏损笔平均 |pnl| (USD, 正数; 0 = 该策略从未亏损)
+
+        :param strategy: 策略名 (与 closed_position["trigger_strategy"] 匹配)
+        :return: StrategyStats if 至少 1 笔历史; None if 无历史
+        """
+        with self._lock:
+            closed = self._data.get("closed_positions", [])
+            my_trades = [
+                c for c in closed
+                if c.get("trigger_strategy") == strategy
+            ]
+            n = len(my_trades)
+            if n == 0:
+                return None
+
+            # 优先取 realized_pnl (close_position 写入的路径)
+            # 兼底 pnl (reconciliation 路径写入的)
+            def _pnl(c: Dict[str, Any]) -> float:
+                val = c.get("realized_pnl")
+                if val is None:
+                    val = c.get("pnl", 0.0)
+                return float(val) if val is not None else 0.0
+
+            wins = [_pnl(c) for c in my_trades if _pnl(c) > 0]
+            losses = [abs(_pnl(c)) for c in my_trades if _pnl(c) < 0]
+
+            win_rate = len(wins) / n
+            avg_win_usd = (sum(wins) / len(wins)) if wins else 0.0
+            avg_loss_usd = (sum(losses) / len(losses)) if losses else 0.0
+
+            return StrategyStats(
+                strategy=strategy,
+                n=n,
+                win_rate=win_rate,
+                avg_win_usd=round(avg_win_usd, 6),
+                avg_loss_usd=round(avg_loss_usd, 6),
+            )
 
     def is_meltdown(self, max_consecutive_losses: int = 3) -> bool:
         """
