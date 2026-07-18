@@ -7,6 +7,11 @@
   - _assess_risk 风险分级
   - format_scan_report 输出格式
   - 边界情况：空 token / 无暴露 / 大文件跳过
+
+⚠️ 安全警告（2026-07-18 security audit）
+   本文件仅使用明显假的占位符 token。如需测试真实 token 检测能力，请使用
+   rotate_telegram_key.py 专用的 fake_workspace fixture。未轮换且未撤销的真实 token
+   绝对不能进入 git history。
 """
 
 import sys
@@ -25,7 +30,9 @@ import rotate_telegram_key as rt
 @pytest.fixture
 def fake_workspace(tmp_path):
     """构造一个 fake workspace 含 .env + 日志 + .py + memory 文件"""
-    fake_token = "8766487959:AAFeU8cHVA_nRxPSdbyJgzrCCnbhronx9o4"
+    # 明显假的占位符（保持 46 字符长度让 len() 断言通过）。
+    # 绝不写入真实 token — test 用 .env 注入或临时 monkeypatch。
+    fake_token = "1111111111:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
     # okx/.env
     env_dir = tmp_path / "okx"
@@ -131,7 +138,7 @@ def test_scan_skips_pyc_and_venv(tmp_path):
     skip_dirs = ["__pycache__", ".venv", "node_modules"]
     for d in skip_dirs:
         (tmp_path / d).mkdir()
-        (tmp_path / d / "secret.txt").write_text("8766487959:AAFeU8cHVA_nRxPSdbyJgzrCCnbhronx9o4")
+        (tmp_path / d / "secret.txt").write_text("1111111111:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
     result = rt.scan_token_exposure(tmp_path)
     for d in skip_dirs:
         skipped = [e for e in result["exposures"] if d in e["file"]]
@@ -177,7 +184,7 @@ def test_format_report_with_exposures(fake_workspace):
     report = rt.format_scan_report(result)
 
     assert "暴露面扫描报告" in report
-    assert "87664879" in report  # masked token 前缀
+    assert "11111111" in report  # masked token 前缀（占位符 1111111111...AAAAAAAA...）
     assert "HIGH" in report
     assert "MEDIUM" in report
     assert "okx/.env" in report
