@@ -33,6 +33,15 @@
       "source_experiment": "okx/docs/agent-context/experiments/diagnose_demo-gate7-btc-n50-v7-improved-20260718-065112",
       "rerun_command": "python3 -m okx.scripts.diagnose_okx_demo --inst-id BTC-USDT-SWAP --n-trades 100 --jitter-seconds 1.0 --name gate7-btc-2026Q4"
     },
+    "kelly": {
+      "_comment": "Phase 5.3 Kelly Criterion 动态仓位 (v1.8.2, Constitution §3.2)",
+      "min_trades_for_kelly": 30,
+      "fractional_kelly": 0.25,
+      "volatility_dampen_threshold": 1.5,
+      "volatility_dampen_factor": 0.7,
+      "fallback_behavior": "hard_cap_1pct_when_no_loss_history",
+      "negative_ev_behavior": "reject_signal"
+    },
     "slippage_bps": 5,
     "taker_fee_rate": 0.00055,
     "tp_partial_ratios": [

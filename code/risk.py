@@ -231,6 +231,127 @@ class RiskCalculator:
             reason="通过风控",
         )
 
+    def calculate_kelly_size(
+        self,
+        win_rate: float,
+        avg_win: float,
+        avg_loss: float,
+        current_atr_ratio: float = 1.0,
+        current_equity: float = 10000.0,
+        leverage: int = 1,
+        sl_distance_pct: float = 0.005,
+        min_trades_for_kelly: int = 30,
+        fractional_kelly: float = 0.25,
+        volatility_dampen_threshold: float = 1.5,
+        volatility_dampen_factor: float = 0.7,
+    ) -> tuple[float, str]:
+        """
+        计算 Kelly Criterion 动态仓位 size (Constitution §3.2, v1.8.2)。
+
+        经典 Kelly 公式:
+            f* = (p × b - q) / b
+            其中 p = 胜率, q = 1 - p, b = 平均盈利 / 平均亏损
+
+        Fractional Kelly (默认 1/4): 防过激 — 真实市场不完全满足 Kelly 假设。
+
+        Hard cap: max_loss_percent_per_trade (Constitution §5, v1.8.1 = 1% 本金/笔)。
+
+        关键行为:
+            1. Negative Kelly (期望值为负) → 返回 (0.0, reason), 由 caller 拒绝开仓
+            2. 数据不足 (avg_loss == 0) → fallback 到 hard cap (保守)
+            3. 高波动 (atr_ratio ≥ threshold) → × dampen_factor (缩仓)
+            4. Kelly 超出 hard cap → clip 到 hard cap (不破 Constitution §5)
+
+        入参:
+            win_rate: 历史胜率 (0.0-1.0)
+            avg_win: 平均盈利 (USD, 正数; 0 = 从未盈利样本)
+            avg_loss: 平均亏损绝对值 (USD, 正数; 0 = 无亏损历史)
+            current_atr_ratio: 当前 ATR / 20-period 中位数 (1.0 = 中位数)
+            current_equity: 当前账户净值 (USDT)
+            leverage: 杠杆倍数
+            sl_distance_pct: SL 距离 (0.005 = 0.5%)
+
+        可选:
+            min_trades_for_kelly: 启用 Kelly 需历史 trade 数 (默认 30, 由 caller 检查)
+            fractional_kelly: Fractional Kelly 比例 (默认 0.25)
+            volatility_dampen_threshold: 高波动阈值 (默认 1.5, atr_ratio 单位)
+            volatility_dampen_factor: 高波动下缩仓乘数 (默认 0.7)
+
+        返回:
+            (size_usd, reason):
+              - size_usd: 建议 margin amount (USD), 已受 hard cap 约束
+              - reason: 决策原因 (供 logging/audit, 不超过 ~120 字符)
+        """
+        # ── 入参校验 ──
+        if not (0.0 <= win_rate <= 1.0):
+            return 0.0, f"invalid_win_rate_{win_rate:.4f}_not_in_[0,1]"
+        if avg_win < 0 or avg_loss < 0:
+            return 0.0, "invalid_avg_win_or_loss_negative"
+        if current_equity <= 0:
+            return 0.0, f"invalid_equity_{current_equity:.2f}_non_positive"
+        if leverage < 1:
+            return 0.0, f"invalid_leverage_{leverage}_must_be_>=_1"
+        if sl_distance_pct <= 0:
+            return 0.0, f"invalid_sl_distance_{sl_distance_pct}_non_positive"
+        if not (0.0 < fractional_kelly <= 1.0):
+            return 0.0, f"invalid_fractional_kelly_{fractional_kelly}_not_in_(0,1]"
+
+        # ── Hard cap (Constitution §5: 1% 本金/笔, v1.8.1) ──
+        max_loss_pct = self._config.max_loss_percent_per_trade / 100.0
+        hard_cap = current_equity * max_loss_pct
+
+        # ── 数据不足: 无亏损历史 → fallback 到 hard cap (保守) ──
+        # 解释: Kelly b = avg_win / avg_loss, avg_loss = 0 数学上爆掉。
+        #       全胜样本 (avg_loss = 0) 不能用 Kelly, 一律走 1% 本金硬上限。
+        if avg_loss <= 0:
+            return hard_cap, "no_loss_history_fallback_to_hard_cap_1pct"
+
+        # ── 经典 Kelly 公式 ──
+        b = avg_win / avg_loss
+        p = win_rate
+        q = 1.0 - p
+        f_full = (p * b - q) / b
+
+        # ── Negative Kelly: 期望值为负, 拒绝开仓 (Kelly 的精髓是"不赌坏赌局") ──
+        if f_full <= 0:
+            return 0.0, (
+                f"negative_EV_kelly={f_full:.4f}_WR={win_rate:.2%}_b={b:.2f}"
+            )
+
+        # ── Fractional Kelly ──
+        f_fractional = fractional_kelly * f_full
+
+        # ── 波动率调整 ──
+        vol_note = ""
+        if current_atr_ratio >= volatility_dampen_threshold:
+            f_fractional *= volatility_dampen_factor
+            vol_note = f"high_vol_{current_atr_ratio:.2f}x_dampen_{volatility_dampen_factor:.2f}"
+
+        # ── 应用到 equity ──
+        size_usd = f_fractional * current_equity
+
+        # ── Hard cap (Constitution §5 不破) ──
+        capped = False
+        if size_usd > hard_cap:
+            size_usd = hard_cap
+            capped = True
+
+        # ── Reason 字符串 (供 logging) ──
+        reason_parts = []
+        if capped:
+            reason_parts.append(
+                f"capped_at_max_loss_{self._config.max_loss_percent_per_trade:.1f}pct_"
+                f"(Kelly_wants_{f_fractional*100:.2f}pct_×_equity)"
+            )
+        else:
+            reason_parts.append(
+                f"kelly_{fractional_kelly:.2f}_of_{f_full*100:.2f}pct_full"
+            )
+        if vol_note:
+            reason_parts.append(vol_note)
+
+        return size_usd, " | ".join(reason_parts)
+
     def validate_leverage(self, leverage: int, symbol: str) -> tuple[bool, str]:
         """
         校验杠杆是否合法
