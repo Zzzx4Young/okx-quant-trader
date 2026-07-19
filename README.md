@@ -68,7 +68,7 @@
 
 | 模块 | 能力 |
 |---|---|
-| **4 个策略** | A EMA 趋势右侧 / B BB+RSI 震荡左侧 / C 波动率爆发 / D 资金费率反转 |
+| **3 个活跃策略** | A EMA 趋势右侧 / B BB+RSI 震荡左侧 / C 波动率爆发 ⚠️ D 已移除 (v1.8.3+) |
 | **多层风控** | Constitution 明文规则：杠杆矩阵 + 流动性过滤 + 熔断冷静期 + 净 RR ≥ 1.5 |
 | **跨策略冲突过滤 §3** | A 趋势 vs B 反转同 symbol 反向 → 拒绝新信号，避免多空互弒；强趋势屏蔽 B + 窄幅震荡屏蔽 A |
 | **摩擦成本校准 §6.2** | Gate 7 实测滑点 / Lv1 费率自动写入 `config.risk.calibration`，fragility_scan 默认读取 |
@@ -236,14 +236,14 @@ systemctl --user daemon-reload && systemctl --user restart <service>
 
 ---
 
-## 📊 4 个策略详解
+## 📊 3 个活跃策略详解（+ 1 个已归档）
 
 | ID | 名称 | 适用市况 | 触发条件概要 |
 |---|---|---|---|
 | **A** | `EMA20_BREAKOUT` | 趋势市右侧 | EMA20 同侧确认 + 量比 ≥ 1.2 + RSI 过滤 |
 | **B** | `BB_RSI_REVERSION` | 震荡市左侧 | BB 触轨 + RSI 极值（>70/<30）+ 反转 K 线 |
 | **C** | `VOLATILITY_BREAKOUT` | 波动率盘整后爆发 | BBW 收缩 + 突破 BB 上下轨 + 量能 ≥ 1.5x |
-| **D** | `FUNDING_RATE_REVERSAL` | 资金费率极端反转 | funding \|rate\| > 0.05% 8h 持续 + RSI 反向 |
+| ~~**D**~~ | ~~`FUNDING_RATE_REVERSAL`~~ | ⚠️ **已移除 v1.8.3+**：fragility_scan 0 viable，根因：funding 触发极罕见（BTC ~1次/年）+ 8h 结算 vs 5m 错位 + blacklist 矛盾 |
 
 详细信号定义 + 回测结论见 `docs/SIGNALS.md` 和 `docs/BACKTEST_DESIGN.md`。
 
@@ -268,7 +268,7 @@ python3 -u -m okx.code.backtest.run_phase2_experiment \
 | **C_VOLATILITY_BREAKOUT** | **+2.87%** | **+0.208** | 47 / 62 tranche | ✅ 真 alpha（跑赢 buy-hold -6.49%） |
 | A_EMA20_BREAKOUT | +1.21% | +0.119 | 32 | 勉强正 alpha |
 | B_BB_RSI_REVERSION | **-37.16%** | **-1.950** | 30 | ⚠️ 大牛市反策略被止损；需 trend filter |
-| D_FUNDING_RATE_REVERSAL | +0% | 0 | 0 | ⚠️ 1h 频率不适合（funding 太稀疏） |
+| ~~D_FUNDING_RATE_REVERSAL~~ | ~~+0%~~ | ~~0~~ | ~~0~~ | ⚠️ **已移除 v1.8.3+**：fragility_scan 证明 0 viable |
 | **[BENCH] 1x_spot** | -6.49% | +0.145 | — | 现货基准 |
 | **[BENCH] 5x_leverage** | -32.43% | +0.682 | — | BTC 杠杆基准（含动态爆仓） |
 

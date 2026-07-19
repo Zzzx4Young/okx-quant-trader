@@ -368,7 +368,7 @@ while page_count < max_pages:
 - A `EMA20_BREAKOUT`：趋势市右侧
 - B `BB_RSI_REVERSION`：震荡市左侧
 - C `VOLATILITY_BREAKOUT`：波动率盘整后爆发
-- D `FUNDING_RATE_REVERSAL`：资金费率极端反转
+- ~~D~~ `FUNDING_RATE_REVERSAL`（**已移除 v1.8.3+**：fragility_scan 0 viable）
 
 **Constitution 关键规则**：
 - 杠杆矩阵（BTC/ETH 5-10x 按 ATR 动态，山寨币 3-5x，高波动 0x）
@@ -536,7 +536,7 @@ while page_count < max_pages:
 | **A_EMA20_BREAKOUT** | +1.21% | +0.119 | -12.18% | -0.619 | 32 / 34 tranche | BTC 微正 alpha，ETH 风控保护 |
 | **B_BB_RSI_REVERSION** | **-37.16%** | **-1.950** | -15.47% | -0.787 | 30 / 29 tranche | BTC 大牛市被反趋势打脸 |
 | **C_VOLATILITY_BREAKOUT** | **+2.87%** | **+0.208** | -1.19% | +0.039 | 47 / 62 tranche | **最佳策略**，跑赢 buy-and-hold |
-| **D_FUNDING_RATE_REVERSAL** | +0.00% | +0.000 | +0.00% | +0.000 | 0 | 1h 频率不适合 |
+| ~~D_FUNDING_RATE_REVERSAL~~ | ~~+0.00%~~ | ~~+0.000~~ | ~~+0.00%~~ | ~~+0.000~~ | ~~0~~ | ⚠️ **已移除 v1.8.3+**：fragility_scan 0 viable，根因：funding 极罕见 + 8h结算错位 |
 | [BENCH] 1x_spot | -6.49% | +0.145 | -27.76% | +0.067 | — | BTC 现货基准 |
 | [BENCH] 5x_leverage | -32.43% | +0.682 | **-100% @bar 3242** | -178.024 | — | ETH 爆仓（基准动态模拟有效） |
 
