@@ -26,6 +26,10 @@
 | v1.4 | 2026-07-11 | Market Constitution 完整实施 | 4 策略全启，风控全配 |
 | **v1.5** | **2026-07-12** | **portfolio ↔ OKX 对账 + 三大 bug 修复 + Git 仓库** | **事故复盘 ETH short 误平，PnL 计算虚高 25 倍修正** |
 | **v1.6** | **2026-07-13** | **Phase 1 回测引擎 + 4 个 OKX API 反直觉点** | **数据引擎跑通（15000 K线 + 292 funding），MVP 验证手续费 3.7% 本金** |
+| v1.7 | 2026-07-15 | A+C double-lock + Phase 2 4 策略回测 milestone | 外部仓 auto-close footgun 修复（-3.99 USDT 事故）|
+| v1.8.1 | 2026-07-18 | §3 跨策略冲突过滤 + 摩擦成本校准 + K线驱动调度 | Telegram token 双写 + restart |
+| **v1.8.2** | **2026-07-18** | **Constitution §3.2 Kelly Criterion 动态仓位** | **B 策略 BTC 1h 27.8% WR → Kelly 自动 disabled** |
+| **v1.8.3** | **2026-07-19** | **D 策略永久禁用 + 6 个 P0-P2 修复** | **fragility_scan 0 viable, config: `strategy_d.enabled=false`；watchdog 哨兵不再失灵 (`c9d5ef2`)** |
 
 详细 commit 历史见 `git log`（2026-07-12 初始化）。
 

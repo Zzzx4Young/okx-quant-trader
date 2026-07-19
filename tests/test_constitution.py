@@ -34,8 +34,9 @@ class TestConstitutionConfig:
         assert cfg.strategy_c_volume_multiplier == 0.5
 
     def test_strategy_d_enabled(self, cfg):
-        assert cfg.strategy_d_enabled is True
-        # 2026-07-12 调整：从 0.0005 改为 0.0001（更多极端事件触发）
+        # v1.8.3+ (2026-07-19): D 策略永久禁用 (fragility_scan 全 timeframe 0 viable)
+        assert cfg.strategy_d_enabled is False
+        # threshold 仍保留 (配置块不删), 防 signal.py:746 AttributeError
         assert cfg.strategy_d_funding_extreme_threshold == 0.0001
 
     def test_leverage_matrix_btc(self, cfg):
@@ -207,7 +208,9 @@ class TestConfigVersion:
     def test_config_version(self, real_config_dict):
         cfg = real_config_dict
         assert cfg["version"] == "1.1.0"
-        assert cfg["updated_at"] == "2026-07-11"
+        # v1.8.3+ (2026-07-19): updated_at 推近到 D 禁用日
+        assert cfg["updated_at"] == "2026-07-19"
         assert cfg["strategy_b"]["enabled"] is True
         assert cfg["strategy_c"]["enabled"] is True
-        assert cfg["strategy_d"]["enabled"] is True
+        # D 禁用后配置块仍保留 (gate 必须存在 config 字段)
+        assert cfg["strategy_d"]["enabled"] is False

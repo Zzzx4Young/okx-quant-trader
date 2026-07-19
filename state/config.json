@@ -1,6 +1,6 @@
 {
   "version": "1.1.0",
-  "updated_at": "2026-07-11",
+  "updated_at": "2026-07-19",
   "trading": {
     "timeframe": "15m",
     "whitelist_symbols": [
@@ -94,14 +94,14 @@
   },
   "strategy_d": {
     "name": "FUNDING_RATE_REVERSAL",
-    "enabled": true,
+    "enabled": false,
     "description": "资金费率极端回归策略：funding 极值 + RSI 反向确认",
     "funding_extreme_threshold": 0.0001,
     "funding_history_lookback": 8,
     "rsi_period": 14,
     "rsi_overbought": 70,
     "rsi_oversold": 30,
-    "_comment": "罕见事件策略。threshold=0.0001=0.01%。BTC 292行历史只触发 1 次, ETH 触发 10 次。5m timeframe 无用 (funding rate 8h 结算一次)。v1.8.3 对齐 matcher (原 matcher 硬编码 0.0002 在历史数据 0 次触发, 原 _comment 写 0.05% 同 0 次)。"
+    "_comment": "⚠️ v1.8.3+ 永久禁用 (enabled=false). fragility_scan 全 timeframe 0 viable: BTC 1h/5m 0 trades, ETH 1h -0.87%, ETH 5m -15.74%. 5 根因: funding 极罕见 (BTC ~1次/年) + 8h 结算 vs 5m 错位 + blacklist 矛盾 + RSI 高频噪声 + 罕见事件不可规模化. 配置 block 保留: 防止 signal.py:746 `strategy_d_enabled` AttributeError (gate 检查必须存在 config 字段). 重启用: 改 true 即可."
   },
   "leverage_matrix": {
     "BTC": {
