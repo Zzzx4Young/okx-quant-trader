@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .config import get_config
+from .utils import to_okx_swap_symbol
 
 if TYPE_CHECKING:
     # 避免循环 import，仅类型检查需要
@@ -144,12 +145,14 @@ class MarketFilter:
         """过滤白名单，返回 {symbol: FilterResult} 映射
 
         通过过滤的 symbol 不出现在结果中（即只返回被过滤掉的）。
+
+        v1.8.3: 用 code.utils.to_okx_swap_symbol() 统一归一化（之前是手写
+        不完整归一化，缺 -SWAP 后缀 → OKX API 返回 [51000] Parameter error
+        → blacklist 默认过滤 BTC/ETH）。
         """
         results = {}
         for symbol in whitelist:
-            inst_id = symbol if "-" in symbol else f"{symbol[:-4]}-{symbol[-4:]}"
-            if "-" not in inst_id:
-                inst_id = f"{symbol[:-4]}-{symbol[-4:]}"
+            inst_id = to_okx_swap_symbol(symbol)
 
             result = self.check_symbol(inst_id)
             if not result.passed:

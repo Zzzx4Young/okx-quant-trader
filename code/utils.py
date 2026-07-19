@@ -133,3 +133,49 @@ def td_mode_to_str(td_mode: str) -> str:
 def now_timestamp_ms() -> int:
     """当前毫秒时间戳"""
     return int(time.time() * 1000)
+
+
+def to_okx_swap_symbol(symbol: str) -> str:
+    """把任意形式的 symbol 转成 OKX SWAP 合约名
+
+    - BTC-USDT-SWAP / BTCUSDT-SWAP / btc-usdt-swap → 原样返回
+    - BTCUSDT / BTC-USDT / BTC_USDT → BTC-USDT-SWAP
+    - ETHUSDT / ETH-USDT → ETH-USDT-SWAP
+    - SOLUSDT → SOL-USDT-SWAP
+    - 其他 → 原样返回
+
+    单一真实源，market_filter / signal / test_connection 三处共用。
+    v1.8.3 修复：之前 market_filter 和 signal.py 各自做不完整归一化 (缺 -SWAP 后缀)
+    → OKX API 返回 [51000] Parameter error → blacklist 误判 BTC/ETH → 全策略 0 笔交易。
+
+    :param symbol: 任意形式 symbol (BTCUSDT / BTC-USDT / BTC-USDT-SWAP)
+    :return: OKX SWAP 合约名 (BTC-USDT-SWAP)
+    """
+    s_upper = symbol.upper().strip()
+    if not s_upper:
+        return symbol
+
+    # 已是 SWAP 形式（含 BTC-USDT-SWAP / BTCUSDTSWAP 等）→ 不变
+    if "SWAP" in s_upper:
+        return s_upper
+
+    # 去所有常见分隔符
+    norm = s_upper.replace("-", "").replace("/", "").replace("_", "").replace(".", "")
+
+    # XXX-USDT 形式（OKX SWAP 惯例）
+    if norm.endswith("USDT") and len(norm) > 4:
+        base = norm[:-4]
+        return f"{base}-USDT-SWAP"
+
+    # XXX-USD 形式
+    if norm.endswith("USD") and len(norm) > 3:
+        base = norm[:-3]
+        return f"{base}-USD-SWAP"
+
+    # XXX-USDC 形式
+    if norm.endswith("USDC") and len(norm) > 4:
+        base = norm[:-4]
+        return f"{base}-USDC-SWAP"
+
+    # 无法识别，原样返回
+    return symbol

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from .config import get_config
 from .market import MarketAPI
+from .utils import to_okx_swap_symbol
 
 
 class Signal:
@@ -585,9 +586,8 @@ class SignalEngine:
         pos_map = {p["symbol"]: p["direction"] for p in positions}
 
         for symbol in whitelist:
-            inst_id = symbol if "-" in symbol else f"{symbol[:-4]}-{symbol[-4:]}"
-            if "-" not in inst_id:
-                inst_id = f"{symbol[:-4]}-{symbol[-4:]}"
+            # v1.8.3: 用 utils.to_okx_swap_symbol() 统一归一化（之前手写不完整，缺 -SWAP）
+            inst_id = to_okx_swap_symbol(symbol)
 
             direction = pos_map.get(inst_id) or pos_map.get(symbol)
 

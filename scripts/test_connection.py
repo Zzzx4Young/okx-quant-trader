@@ -408,18 +408,13 @@ def print_json_report(probes: List[Probe], precheck_info: Dict[str, Any]) -> boo
 # ──────────── 主入口 ────────────
 
 def to_okx_swap_symbol(s: str) -> str:
-    """把任意形式的 symbol 转成 OKX SWAP 合约名：BTCUSDT / BTC-USDT → BTC-USDT-SWAP
+    """⚠️ v1.8.3 已迁移到 code/utils.to_okx_swap_symbol()
 
-    仅当 symbol 未包含 '-SWAP' / 'SWAP' 后缀时才追加。
+    本函数保留为薄包装转发，保持向后兼容（test_connection.py 是脚本，
+    其他 code 模块可能 import 这里）。所有调用应该改用 code.utils 版。
     """
-    s_upper = s.upper()
-    if "SWAP" in s_upper:
-        return s  # 已是 SWAP 形式（含 BTC-USDT-SWAP / BTCUSDTSWAP 等）
-    norm = RiskCalculator._normalize_symbol(s)  # 去分隔符
-    if norm.endswith("USDT") and len(norm) > 4:  # BTCUSDT / ETHUSDT
-        base = norm[:-4]
-        return f"{base}-USDT-SWAP"
-    return s
+    from okx.code.utils import to_okx_swap_symbol as _impl
+    return _impl(s)
 
 
 def get_default_symbols() -> List[str]:
