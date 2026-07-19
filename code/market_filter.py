@@ -11,10 +11,13 @@ Market Filter — 流动性/黑名单过滤 (Constitution §4)
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .config import get_config
-from .market import MarketAPI
+
+if TYPE_CHECKING:
+    # 避免循环 import，仅类型检查需要
+    from .client import OKXClient
 
 
 logger = logging.getLogger(__name__)
@@ -46,10 +49,18 @@ class FilterResult:
 
 
 class MarketFilter:
-    """市场过滤（Constitution §4）"""
+    """市场过滤（Constitution §4）
 
-    def __init__(self, market_api: MarketAPI, config: Optional[Any] = None):
-        self._market = market_api
+    接 OKXClient（不是 MarketAPI），因为需要访问 public API（instruments）
+    验证合约状态。MarketAPI._client 是 HTTPClient，没有 .public 子客户端
+    —— 历史上 market_filter.py:109 误用 `self._market._client.public`
+    导致 AttributeError，所有 blacklist 检查都 fallback 到默认过滤，
+    BTC/ETH 因此被错拦。v1.8.3 修复。
+    """
+
+    def __init__(self, client: "OKXClient", config: Optional[Any] = None):
+        self._client = client
+        self._market = client.market  # 保留别名给 ticker / funding_rate 用
         self._config = config or get_config()
 
     def check_symbol(self, symbol: str) -> FilterResult:
@@ -106,7 +117,10 @@ class MarketFilter:
             inst_id = symbol
             if not symbol.endswith("-SWAP"):
                 inst_id = f"{symbol}-SWAP"
-            instruments = self._market._client.public.get_instruments(inst_type="SWAP")
+            # ✅ v1.8.3 修复：之前是 `self._market._client.public.get_instruments(...)`
+            # 但 MarketAPI._client 是 HTTPClient，没有 .public 属性
+            # → AttributeError → blacklist fallback → BTC/ETH 被默认拦截
+            instruments = self._client.public.get_instruments(inst_type="SWAP")
             for inst in instruments:
                 if inst.get("instId") == inst_id:
                     state = inst.get("state", "live")
@@ -149,6 +163,6 @@ class MarketFilter:
 
 
 def get_filter() -> MarketFilter:
-    """工厂函数：默认从 .env + global market client 构造"""
+    """工厂函数：默认从 .env + global OKXClient 构造"""
     from .client import OKXClient
-    return MarketFilter(OKXClient().market)
+    return MarketFilter(OKXClient())

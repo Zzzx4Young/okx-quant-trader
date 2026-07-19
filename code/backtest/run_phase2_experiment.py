@@ -191,7 +191,9 @@ def strategy_d_funding_reversal(df, i, indicators, position, funding_df, symbol)
     if pd.isna(last_rate):
         return None
     
-    THRESHOLD = 0.0002  # 0.02%（修 Bug 2：原 0.05% 在 20 月数据上永不触发）
+    THRESHOLD = 0.0001  # 0.01%（对齐 config.json strategy_d.funding_extreme_threshold；v1.8.3 修）
+    # 注：这是罕见事件策略。BTC-USDT-SWAP 292行历史只触发 1 次，ETH-USDT-SWAP 触发 10 次。
+    # 原 0.0002 (0.02%) 在历史数据上 0 次触发；原 0.05% 同上。
     
     if last_rate > THRESHOLD:
         return "short"

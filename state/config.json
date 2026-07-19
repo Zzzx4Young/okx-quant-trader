@@ -45,9 +45,9 @@
     "slippage_bps": 5,
     "taker_fee_rate": 0.00055,
     "tp_partial_ratios": [
-      0.30,
-      0.30,
-      0.40
+      0.3,
+      0.3,
+      0.4
     ],
     "tp_partial_rr": [
       1.0,
@@ -101,7 +101,7 @@
     "rsi_period": 14,
     "rsi_overbought": 70,
     "rsi_oversold": 30,
-    "_comment": "策略 D 等待 funding 极端事件。当前 BTC funding 0.0056%，远低于 0.05% 阈值。是罕见事件策略。"
+    "_comment": "罕见事件策略。threshold=0.0001=0.01%。BTC 292行历史只触发 1 次, ETH 触发 10 次。5m timeframe 无用 (funding rate 8h 结算一次)。v1.8.3 对齐 matcher (原 matcher 硬编码 0.0002 在历史数据 0 次触发, 原 _comment 写 0.05% 同 0 次)。"
   },
   "leverage_matrix": {
     "BTC": {
@@ -143,7 +143,7 @@
   "audit": {
     "max_consecutive_losses": 3,
     "lockout_duration_minutes": 30,
-    "fee_to_profit_ratio_threshold": 0.30,
+    "fee_to_profit_ratio_threshold": 0.3,
     "enable_meltdown_lock": true
   },
   "openclaw": {

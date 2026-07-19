@@ -229,7 +229,7 @@ class Runner:
         # ── 流动性 / 黑名单过滤 (Constitution §4) ──
         try:
             from .market_filter import MarketFilter
-            mf = MarketFilter(self._client.market, self._config)
+            mf = MarketFilter(self._client, self._config)
             blacklist = mf.filter_whitelist(self._config.whitelist_symbols)
             if blacklist:
                 symbols = ", ".join(blacklist.keys())
