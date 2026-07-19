@@ -41,6 +41,26 @@ def _safe_float(x: Any, default: float = 0.0) -> float:
         return default
 
 
+def _normalize_position(op: Dict) -> Tuple[float, float, float]:
+    """从 OKX 仓位 dict 提取 (notional_usd, margin_est, ct_val).
+
+    v1.8.3+ fix (candidate #6): notional 必须 = mark × sz × ct_val
+        旧公式 mark × sz 会算大 100× (BTC sz=0.16 ct_val=0.01, 旧算法算出 $10,317)
+        新公式 mark × sz × ct_val 算出 $103 (与 OKX API 返回一致)
+
+    :param op: OKX position API 单条仓位 dict
+    :return: (notional_usd, margin_est_usd, ct_val)
+    """
+    entry = _safe_float(op.get("avgPx"))
+    mark = _safe_float(op.get("markPx")) or entry
+    sz = abs(_safe_float(op.get("pos")))
+    lever = _safe_float(op.get("lever"), 1.0)
+    ct_val = _safe_float(op.get("ctVal"), 1.0)
+    notional = mark * sz * ct_val  # ← v1.8.3+ fix: 加 * ct_val（修复 100x 计算错）
+    margin_est = round(notional / lever, 6) if lever > 0 else notional
+    return notional, margin_est, ct_val
+
+
 def _load(path: Path) -> Dict:
     with open(path) as f:
         return json.load(f)
@@ -268,13 +288,8 @@ def reconcile(
         if key in existing_local_keys:
             continue
 
-        entry = _safe_float(op.get("avgPx"))
-        mark = _safe_float(op.get("markPx")) or entry
-        sz = abs(_safe_float(op.get("pos")))
-        lever = _safe_float(op.get("lever"), 1.0)
-        # cross 模式 margin OKX 不返回 → 用 notional/leverage 估值
-        notional = mark * sz
-        margin_est = round(notional / lever, 6) if lever > 0 else notional
+        # v1.8.3+ refactor: 提取到 _normalize_position() helper (testable)
+        notional, margin_est, ct_val = _normalize_position(op)
         c_time_ms = int(op.get("cTime", 0))
         opened_iso = (
             datetime.fromtimestamp(c_time_ms / 1000.0).isoformat(timespec="seconds")

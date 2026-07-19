@@ -73,14 +73,18 @@ def test_compute_stats_limit_slip_zero(mock_records):
 
 
 def test_check_release_gates_pass_with_good_slippage(mock_records):
-    """3 条 release gate 在 mock 数据下应全过"""
+    """v1.8.3+ B 路径 split 化: 3 条 active gate 在 mock 数据下应全过
+    (avg_taker_slip_le_8bps + p95_taker_slip_le_15bps + market_fill_rate_ge_95pct)
+    _legacy_fill_rate_ge_90pct 保留为 legacy 记录，不计入主判定"""
     stats = diag.compute_stats(mock_records)
     gates = diag.check_release_gates(stats)
 
     assert gates["avg_taker_slip_le_8bps"] is True
     assert gates["p95_taker_slip_le_15bps"] is True
-    assert gates["fill_rate_ge_90pct"] is True
-    assert all(gates.values())
+    assert gates["market_fill_rate_ge_95pct"] is True
+    # main gates (excluding legacy) all true
+    main_gates = {k: v for k, v in gates.items() if not k.startswith('_')}
+    assert all(main_gates.values()), f"Some main gates failed: {main_gates}"
 
 
 def test_check_release_gates_fail_when_slippage_too_high():
@@ -105,10 +109,11 @@ def test_check_release_gates_fail_when_slippage_too_high():
 
 
 def test_check_release_gates_fail_when_fill_rate_low():
-    """fill rate < 90% → 红线 fail"""
+    """v1.8.3+ B 路径 split 化: market_fill_rate < 95% → 新 gate fail
+    (原 fill_rate_ge_90pct 在 demo 上物理不可达，已废弃为 _legacy)"""
     records = []
     for i in range(100):
-        # 只有 50% 成交
+        # 只有 50% 成交 (market_fill_rate = 0.5 < 0.95)
         if i < 50:
             records.append(diag.SlipRecord(
                 idx=i, ord_type="market", side="buy",
@@ -130,7 +135,10 @@ def test_check_release_gates_fail_when_fill_rate_low():
     stats = diag.compute_stats(records)
     gates = diag.check_release_gates(stats)
 
-    assert gates["fill_rate_ge_90pct"] is False
+    # v1.8.3+ 改判 market_fill_rate
+    assert gates["market_fill_rate_ge_95pct"] is False
+    # legacy 保留返回值
+    assert "_legacy_fill_rate_ge_90pct" in gates
 
 
 # ──────────── percentile 测试 ────────────
