@@ -378,6 +378,35 @@ def write_log(
         f.write("\n")
 
 
+def _build_layer1_section(layer1_issues: List[Dict[str, Any]], mode: str) -> str:
+    """构建 Layer 1 issues 报告片段（如果有）。
+
+    v1.8.3 修复：之前此逻辑嵌入在 main() 内部闭包，无法被复用 / 测试。
+    提取为模块级函数便于单测 + 跨 watchdog 流程复用。
+
+    :param layer1_issues: Layer 1 检查出的 issue dict 列表（每项含 level/check/message）
+    :param mode: 交易模式（live / demo）
+    :return: 格式化的报告片段；无 issues 返回 ""
+    """
+    if not layer1_issues:
+        return ""
+    ts = _now_utc().strftime("%Y-%m-%d %H:%M:%S UTC")
+    critical_count = sum(1 for i in layer1_issues if i.get("level") == "critical")
+    warn_count = len(layer1_issues) - critical_count
+    if critical_count:
+        status = f"🚨 异常（{critical_count} critical / {warn_count} warning）"
+    else:
+        status = f"⚠️  注意（{warn_count} warning）"
+    lines = [f"[{ts}] {status} | 模式: {mode}（Layer 1: 进程健康）"]
+    for it in layer1_issues:
+        level = it.get("level", "?")
+        check = it.get("check", "?")
+        msg = it.get("message", "?")
+        icon = "❌" if level == "critical" else "⚠️ "
+        lines.append(f"  {icon} [{level.upper()}] {check}: {msg}")
+    return "\n".join(lines)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="OKX Runner Watchdog v2 — 仓位风险监控")
     parser.add_argument("--dry-run", action="store_true", help="只检查不发 Telegram")
@@ -426,29 +455,26 @@ def main() -> int:
 
     # ── Layer 5: 生成报告 ──
     mode = os.getenv("OKX_TRADING_MODE", "demo").lower()
+
+    # ⚠️ v1.8.3 修复：之前 format_report 只接 risk_issues (Layer 2-4)，Layer 1 critical issues
+    # (如 heartbeat stale / emergency_stop / consecutive_losses) 会被丢夫。
+    # 结果：script 输出 "✓ 健康" + Telegram 不告警，但 Runner 实际已停摆 N 分钟。
+    # 修复：永远拼接 Layer 1 issues 到报告前面, 独立判断 critical/warning。
+
+    layer1_section = _build_layer1_section(layer1_issues, mode)
+
     if metrics is not None and not args.no_risk:
         from okx.scripts.risk_monitor import format_report
-        report_text = format_report(metrics, risk_issues, mode=mode, include_dashboard=True)
+        layer24_text = format_report(metrics, risk_issues, mode=mode, include_dashboard=True)
+        # 拼接：Layer 1 critical 在前, Layer 2-4 dashboard 在后
+        report_text = (layer1_section + "\n\n" + layer24_text) if layer1_section else layer24_text
     else:
-        # 仅 Layer 1
-        ts = _now_utc().strftime("%Y-%m-%d %H:%M:%S UTC")
-        if all_issues:
-            critical_count = sum(1 for i in all_issues if (isinstance(i, dict) and i.get("level") == "critical") or getattr(i, "level", "") == "critical")
-            warn_count = len(all_issues) - critical_count
-            if critical_count:
-                status = f"🚨 异常（{critical_count} critical / {warn_count} warning）"
-            else:
-                status = f"⚠️  注意（{warn_count} warning）"
-            lines = [f"[{ts}] {status} | 模式: {mode}（仅 Layer 1）"]
-            for it in all_issues:
-                level = it.get("level") if isinstance(it, dict) else getattr(it, "level", "?")
-                check = it.get("check") if isinstance(it, dict) else getattr(it, "check", "?")
-                msg = it.get("message") if isinstance(it, dict) else getattr(it, "message", "?")
-                icon = "❌" if level == "critical" else "⚠️ "
-                lines.append(f"  {icon} [{level.upper()}] {check}: {msg}")
-            report_text = "\n".join(lines)
+        # 仅 Layer 1 (Layer 2-4 metrics 不可用)
+        if layer1_section:
+            report_text = layer1_section
         else:
-            report_text = f"[{ts}] ✓ 健康（仅 Layer 1，无 Layer 2-4） | 模式: {mode}"
+            ts = _now_utc().strftime("%Y-%m-%d %H:%M:%S UTC")
+            report_text = f"[{ts}] ✓ 健康（仅 Layer 1, 无 Layer 2-4） | 模式: {mode}"
 
     # ── 输出 + 写日志 ──
     print(report_text)
