@@ -273,3 +273,57 @@ def test_run_at_next_bar_runner_error_doesnt_crash(monkeypatch):
     assert any("runner_failed" in e for e in result["errors"])
     # finished_at 应仍被设置
     assert result["finished_at"] is not None
+
+
+def test_run_at_next_bar_fallback_when_cold_start_drift(monkeypatch):
+    """sub-agent 冷启动漂移让 spawn 远离下个整点 → wait_seconds > 240s → 跳过 spinlock
+
+    场景：cron 触发后 sub-agent 冷启动 ~27 分钟（极端情况），
+    boundary 是下个 1h 整点 → wait_seconds = 1650s，远超 MAX_WAIT_SECONDS=240s。
+    期望：自动跳过 spinlock，立即执行 Runner.run()（fallback 模式），
+    并在 result 中标记 spinlock_skipped_reason。
+    """
+    from datetime import datetime, timezone, timedelta
+
+    # 模拟 sub-agent spawn 在 04:32:25 UTC（远离下个 1h 整点 05:00:00）
+    fake_spawn_utc = datetime(2026, 7, 19, 4, 32, 25, tzinfo=timezone.utc)
+
+    # Monkeypatch datetime.now() 固定到 fake_spawn_utc，让 boundary 计算落在 05:00:00
+    real_datetime = sr.datetime
+
+    class FixedDatetime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fake_spawn_utc.replace(tzinfo=None)
+            return fake_spawn_utc
+
+    monkeypatch.setattr(sr, "datetime", FixedDatetime)
+
+    # Mock Runner 避免真跑
+    mock_runner = MagicMock()
+    mock_runner.run.return_value = {"signal_triggered": None, "errors": []}
+    monkeypatch.setattr("okx.code.runner.Runner", MagicMock(return_value=mock_runner))
+
+    # time.sleep 必须立即返回（不能真睡 1650s！）
+    monkeypatch.setattr(sr.time, "sleep", lambda s: None)
+
+    result = sr.run_at_next_bar(
+        timeframe="1h",
+        spinlock_seconds=5.0,
+        skip_spinlock=False,  # 关键: 不预设 skip
+    )
+
+    # 关键断言 1: spinlock 已被自动跳过
+    assert result["spinlock_skipped"] is True
+
+    # 关键断言 2: result 里有 fallback 原因说明
+    assert "spinlock_skipped_reason" in result
+    assert "wait_too_long" in result["spinlock_skipped_reason"]
+    assert "1650" in result["spinlock_skipped_reason"] or "wait" in result["spinlock_skipped_reason"].lower()
+
+    # 关键断言 3: Runner.run() 仍然被调用了一次（fallback 跑对账 + 持仓管理）
+    assert mock_runner.run.call_count == 1
+
+    # 关键断言 4: 整体耗时应该 < 30s（mock sleep + 实际 runner）
+    # （这里只能间接验证 — 跑通就 OK）

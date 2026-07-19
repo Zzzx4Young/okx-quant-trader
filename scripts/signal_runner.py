@@ -217,17 +217,43 @@ def run_at_next_bar(
         # 预热失败不应阻塞（K 线驱动容错：单点失败不退出非零码）
 
     # 3. 等待 Spin-lock 起始（用 sleep 而非 Spin-lock，避免长时间 CPU 占用）
+    # ────────────────────────────────────────────────────────────────
+    # ⚠️ 自适应 spinlock：sub-agent 冷启动漂移（实测 ~2m42s，最大可达 5m+）
+    # 可能让 sub-agent spawn 时间远离下一个 K 线整点（如下午 12:32 spawn，
+    # 下一个 1h 整点是 13:00，则 wait_seconds=27 分 35 秒 = 1650s）。
+    # 在这种情况下 time.sleep(1650s) 会撞 cron timeoutSeconds=300s 触发 timeout。
+    #
+    # 设计：wait_seconds > MAX_WAIT_SECONDS 时跳过 spinlock 立即执行 fallback。
+    # fallback 行为：Runner.run() 内部 _is_trade_time() 判断非 quarter 分钟
+    # → 返回 tick=False，但仍会跑对账 + 持仓管理 + 风控检查 + 写 heartbeat，
+    # 不触发新信号。
+    # ────────────────────────────────────────────────────────────────
+    MAX_WAIT_SECONDS = 240  # 4 分钟（cron timeout=600s 留 6 分钟余量）
     now = datetime.now(timezone.utc)
     if now < spinlock_start and not skip_spinlock:
         wait_seconds = (spinlock_start - now).total_seconds()
-        logger.info(f"⏳ 等待 Spin-lock 起始: {wait_seconds:.1f}s")
-        time.sleep(wait_seconds)
+        if wait_seconds > MAX_WAIT_SECONDS:
+            logger.warning(
+                f"⚠️ spinlock wait 过长 ({wait_seconds:.0f}s > {MAX_WAIT_SECONDS}s), "
+                f"判定 sub-agent 冷启动漂移 → 跳过 spinlock 立即执行 fallback "
+                f"(boundary={boundary.isoformat()})"
+            )
+            result["spinlock_skipped_reason"] = (
+                f"wait_too_long: {wait_seconds:.0f}s > {MAX_WAIT_SECONDS}s "
+                f"(sub-agent cold-start drift)"
+            )
+            skip_spinlock = True
+            # 同步 result 字段（外部观察者能看到最终决定）
+            result["spinlock_skipped"] = True
+        else:
+            logger.info(f"⏳ 等待 Spin-lock 起始: {wait_seconds:.1f}s")
+            time.sleep(wait_seconds)
 
     # 4. Spin-lock（最后 spinlock_seconds 秒）
     if not skip_spinlock:
         spinlock_until(boundary, poll_interval_ms=100)
     else:
-        logger.warning("⚠️ 跳过 Spin-lock（调试模式）")
+        logger.warning("⚠️ 跳过 Spin-lock（fallback 模式）")
 
     # 5. 调用 Runner.run()
     try:
