@@ -243,7 +243,11 @@ class Runner:
 
         # ── 手续费占比审计 (Constitution §5) ──
         if self._config.audit_enable_meltdown_lock:
-            daily = self._portfolio.daily_stats
+            # ✅ v1.8.3 修复：之前是 `self._portfolio.daily_stats`（属性访问），
+            # 但 Portfolio 类只暴露 get_daily_stats() 方法，self._data["daily_stats"] 是 dict key。
+            # 这个 bug 被端到端验证（mock datetime 到 1h K 线边界）首次触发，
+            # 之前因 blacklist bug 导致 signals_checked=false 早退，从未走到这一行。
+            daily = self._portfolio.get_daily_stats()
             if daily:
                 pnl_gross = daily.get("total_pnl_gross", 0) or daily.get("total_pnl", 0)
                 total_fee = daily.get("total_fee", 0) or daily.get("fees", 0)
