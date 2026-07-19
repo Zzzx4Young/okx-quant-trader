@@ -59,6 +59,11 @@ class Runner:
             env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
             self._notifier = TelegramNotifier.from_env(env_path) if self._config.notifier_enabled else NoopNotifier()
 
+        # ── v1.8.3+: live 模式下首次 runner 构造 → 标记 first_live_tick ──
+        # demo 模式不设置 (Portfolio 默认 first_live_tick_at=None, is_live_first_week() 永远 False)
+        if not self._config.demo_mode:
+            self._portfolio.mark_first_live_tick()
+
         # Constitution §3 跨策略冲突过滤：按 symbol 维护最近信号窗口
         # 用于 A↔B 同 symbol 反向信号的时间窗口检测（默认 60 分钟）
         self._recent_signals: Dict[str, deque] = {}
@@ -240,6 +245,23 @@ class Runner:
                 }
         except Exception as e:
             logger.warning(f"流动性检查失败（不阻塞交易）: {e}")
+
+        # ── v1.8.3+ live 第一周 BTC only (Constitution §X.Y, Gate 7 split 教训) ──
+        # 如果在 live 模式 且 trading.live_first_week_btc_only=true 且当前是首周内
+        # 且白名单里有非 BTC 标的 (如 ETH), 则拒绝所有信号, ETH 等一周后开通。
+        if (
+            not self._config.demo_mode
+            and self._config.get("trading.live_first_week_btc_only", False)
+            and self._portfolio.is_live_first_week()
+        ):
+            whitelist = self._config.get("trading.whitelist_symbols", []) or []
+            non_btc = [s for s in whitelist if "BTC" not in s.upper()]
+            if non_btc:
+                return {
+                    "passed": False,
+                    "stage": "live_first_week_btc_only",
+                    "reason": f"live 第一周仅允许 BTC, {', '.join(non_btc[:3])} 等一周后开通 (Gate 7 ETH demo limit_fill_rate=0% 教训 v1.8.3+)",
+                }
 
         # ── 手续费占比审计 (Constitution §5) ──
         if self._config.audit_enable_meltdown_lock:

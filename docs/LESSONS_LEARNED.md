@@ -30,6 +30,7 @@
 | v1.8.1 | 2026-07-18 | §3 跨策略冲突过滤 + 摩擦成本校准 + K线驱动调度 | Telegram token 双写 + restart |
 | **v1.8.2** | **2026-07-18** | **Constitution §3.2 Kelly Criterion 动态仓位** | **B 策略 BTC 1h 27.8% WR → Kelly 自动 disabled** |
 | **v1.8.3** | **2026-07-19** | **D 策略永久禁用 + 6 个 P0-P2 修复** | **fragility_scan 0 viable, config: `strategy_d.enabled=false`；watchdog 哨兵不再失灵 (`c9d5ef2`)** |
+| **v1.8.3+** | **2026-07-19** | **Gate 7 split 化（3+1 红线）+ live 第 1 周 BTC only 政策** | **BTC+ETH N=100 实证：Taker avg 1.42/0.14 bps（红线 8 bps 利用率 18%/2%），limit_fill_rate demo 30%/0% 不可达；split 化红线后 3/3 全过。Live 首周限制 `trading.live_first_week_btc_only=true` 防 ETH demo 流动性伪命题。** |
 
 详细 commit 历史见 `git log`（2026-07-12 初始化）。
 

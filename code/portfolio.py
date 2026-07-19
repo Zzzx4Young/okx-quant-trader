@@ -100,10 +100,43 @@ class Portfolio:
                 "emergency_stop_triggered": False,
             },
             "closed_positions": [],
+            # v1.8.3+: live 第一周 BTC only 策略 (Constitution §X.Y)
+            # 记录首次 live tick 时间, is_live_first_week() 依此判定。
+            # demo 状态不会设置此字段。
+            "first_live_tick_at": None,
         }
 
     def _now_iso(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # ── live 第一周追踪 (Constitution §X.Y, v1.8.3+ Gate 7 split 教训) ──
+
+    def mark_first_live_tick(self) -> bool:
+        """标记首次 live tick 时间戳 (幂等)。
+
+        :return: True 如果本次新设置, False 如果已有 timestamp。
+        """
+        with self._lock:
+            if self._data.get("first_live_tick_at") is None:
+                self._data["first_live_tick_at"] = self._now_iso()
+                self._save()
+                return True
+            return False
+
+    def is_live_first_week(self, duration_days: int = 7) -> bool:
+        """当前是否处于 live 上线后首次 N 天内。
+
+        demo 状态永不返回 True（依赖 first_live_tick_at 为 None）。
+        """
+        first_at = self._data.get("first_live_tick_at")
+        if not first_at:
+            return False
+        try:
+            started = datetime.fromisoformat(first_at.replace("Z", "+00:00"))
+            elapsed = datetime.now(timezone.utc) - started
+            return elapsed.total_seconds() < duration_days * 86400
+        except (ValueError, AttributeError):
+            return False
 
     def _today(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%d")

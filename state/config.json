@@ -7,12 +7,15 @@
       "BTCUSDT",
       "ETHUSDT"
     ],
+    "_live_first_week_btc_only_comment": "v1.8.3+ Gate 7 split 教训: live 第一周仅允许 BTC, ETH 一周后开通 (ETH demo limit_fill_rate=0% 实证). 默认 false (demo 不启用). 切 live 前手动开为 true。",
     "margin_mode": "isolated",
     "default_leverage_main": 5,
     "max_leverage_limit": 10,
     "max_concurrent_positions": 3,
     "emergency_stop": false,
-    "demo_mode": true
+    "demo_mode": true,
+    "_live_first_week_btc_only_comment": "v1.8.3+ Gate 7 split 教训: live 第一周仅允许 BTC, ETH 一周后开通 (ETH demo limit_fill_rate=0% 实证). 默认 false (demo 不启用). 切 live 前手动开为 true。",
+    "live_first_week_btc_only": false
   },
   "risk": {
     "max_loss_percent_per_trade": 1.0,
