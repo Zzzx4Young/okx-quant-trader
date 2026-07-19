@@ -324,8 +324,11 @@ def check_thresholds(
             elif value <= t.warn:
                 triggered_level = "warning"
         if triggered_level:
+            # structural 指标（集中度）override level = "structural"
+            # watchdog 会只写日志不发 Telegram（避免告警噪声）
+            final_level = "structural" if t.structural else triggered_level
             msg = f"{t.description}: {fmt.format(value)}（阈值 {t.direction} {fmt.format(t.crit if triggered_level=='critical' else t.warn)}）"
-            issues.append(_make_issue(name, triggered_level, msg, value, t))
+            issues.append(_make_issue(name, final_level, msg, value, t))
 
     if metrics.position_count == 0:
         return issues  # 无持仓不检查

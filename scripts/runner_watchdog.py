@@ -293,9 +293,18 @@ def send_telegram_alert(
 
     critical = [i for i in all_issues if _get_issue(i, "level") == "critical"]
     warning = [i for i in all_issues if _get_issue(i, "level") == "warning"]
+    structural = [i for i in all_issues if _get_issue(i, "level") == "structural"]
+
+    # structural (集中度等结构性失衡) → 只写日志不发 Telegram (防告警噪声)
+    # structural issue 仍会写入 watchdog.log + critical.log fallback, 仅抑制 Telegram
+    if structural:
+        logger.info(
+            f"结构性告警 ({len(structural)}) 被抑制发 Telegram, 仅日志: "
+            + ", ".join(f"{_get_issue(i, 'check')}:{_get_issue(i, 'level')}" for i in structural)
+        )
 
     if not critical:
-        return False  # 仅 warning → 仅日志
+        return False  # 仅 warning / structural → 仅日志
 
     # 用 risk_monitor 的格式化函数（如果有 metrics）
     if metrics is not None:

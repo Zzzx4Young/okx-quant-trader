@@ -401,7 +401,12 @@ class TestCheckThresholds:
         issues = check_thresholds(m)
         assert any(i.check == "liq_proximity_pct" and i.level == "critical" for i in issues)
 
-    def test_inst_concentration_critical(self):
+    def test_inst_concentration_structural(self):
+        """inst_concentration 属结构性失衡，应返回 level="structural"（不被 watchdog 发 Telegram）
+
+        设计：集中度是 portfolio 结构特征，不是当下爆仓风险。
+        watchdog 会抑制 Telegram，仅写日志。v1.8.3+ (2026-07-19)。
+        """
         m = RiskMetrics(
             equity_usd=77000.0,
             inst_concentration=0.75,  # crit=0.70
@@ -409,7 +414,35 @@ class TestCheckThresholds:
             position_count=1,
         )
         issues = check_thresholds(m)
-        assert any(i.check == "inst_concentration" and i.level == "critical" for i in issues)
+        assert any(i.check == "inst_concentration" and i.level == "structural" for i in issues)
+        # 不再是 critical (防告警噪声)
+        assert not any(i.check == "inst_concentration" and i.level == "critical" for i in issues)
+
+    def test_strategy_concentration_structural(self):
+        """strategy_concentration 同样属于 structural"""
+        m = RiskMetrics(
+            equity_usd=77000.0,
+            strategy_concentration=0.85,  # crit=0.80
+            strategy_concentration_target="A",
+            position_count=1,
+        )
+        issues = check_thresholds(m)
+        assert any(i.check == "strategy_concentration" and i.level == "structural" for i in issues)
+        assert not any(i.check == "strategy_concentration" and i.level == "critical" for i in issues)
+
+    def test_structural_override_does_not_affect_real_critical(self):
+        """structural 标记只 override 集中度；真 critical 仍然发 critical（如 leverage 爆仓）"""
+        m = RiskMetrics(
+            equity_usd=77000.0,
+            gross_leverage=5.5,  # crit
+            inst_concentration=0.75,  # structural
+            position_count=1,
+        )
+        issues = check_thresholds(m)
+        # gross_leverage 应仍是 critical (真风险)
+        assert any(i.check == "gross_leverage" and i.level == "critical" for i in issues)
+        # inst_concentration 是 structural
+        assert any(i.check == "inst_concentration" and i.level == "structural" for i in issues)
 
     def test_sl_consumed_warning(self):
         m = RiskMetrics(

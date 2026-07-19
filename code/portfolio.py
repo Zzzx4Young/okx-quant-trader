@@ -46,8 +46,42 @@ class Portfolio:
         if self._path.exists():
             with open(self._path, "r", encoding="utf-8") as f:
                 self._data = json.load(f)
+            self._validate_schema()
         else:
             self._data = self._default_state()
+
+    def _validate_schema(self) -> None:
+        """校验加载的 portfolio schema，缺失字段 fail-loud
+
+        设计目的: sync 阶段如果 bug 丢字段，宁可启动失败也不要静默用错数据。
+        —— 金融场景宁可 startup fail 也不要自动 reset (避免误抹历史)。
+
+        :raises ValueError: schema 缺失关键字段
+        """
+        required_top = {
+            "version", "updated_at", "positions", "daily_stats", "closed_positions"
+        }
+        missing_top = required_top - set(self._data.keys())
+        if missing_top:
+            raise ValueError(
+                f"portfolio.json schema invalid: missing top-level keys {sorted(missing_top)}. "
+                f"Found: {sorted(self._data.keys())}. "
+                f"Refusing to start with potentially corrupted state. "
+                f"Path: {self._path}"
+            )
+
+        required_daily = {
+            "date", "total_trades", "loss_trades", "consecutive_losses",
+            "total_pnl", "total_fee", "total_pnl_gross", "last_loss_at",
+            "emergency_stop_triggered",
+        }
+        missing_daily = required_daily - set(self._data.get("daily_stats", {}).keys())
+        if missing_daily:
+            raise ValueError(
+                f"portfolio.json daily_stats schema invalid: missing keys {sorted(missing_daily)}. "
+                f"Found: {sorted(self._data.get('daily_stats', {}).keys())}. "
+                f"Path: {self._path}"
+            )
 
     def _default_state(self) -> Dict[str, Any]:
         return {

@@ -28,6 +28,11 @@ class RiskThreshold:
     crit: float
     direction: str  # "high"=超过触发；"low"=低于触发
     description: str = ""
+    # ──── structural 标记 ────
+    # True 表示该指标属于"结构性失衡"（如集中度），不是当下爆仓风险。
+    # watchdog 会把 structural issue 走"只写日志不发 Telegram"路径，
+    # 避免反复报同一类非即时风险。默认 False（保留即时告警语义）。
+    structural: bool = False
 
 
 # 阈值常量（按 demo 账户调校，单一值起步，跑 1 周根据数据再调）
@@ -47,15 +52,17 @@ RISK_THRESHOLDS: Dict[str, RiskThreshold] = {
         warn=-0.05, crit=-0.10, direction="low",
         description="总未实现盈亏占净值比例",
     ),
-    # 单标的敞口占比
+    # 单标的敞口占比（结构性失衡，非即时爆仓风险）
     "inst_concentration": RiskThreshold(
         warn=0.50, crit=0.70, direction="high",
         description="单标的（BTC/ETH等）敞口占总名义比例",
+        structural=True,
     ),
-    # 单策略敞口占比
+    # 单策略敞口占比（结构性失衡）
     "strategy_concentration": RiskThreshold(
         warn=0.60, crit=0.80, direction="high",
         description="单策略（A/B/C/D）敞口占总名义比例",
+        structural=True,
     ),
     # 最小强平距离（占 markPx 比例）
     "liq_proximity_pct": RiskThreshold(
