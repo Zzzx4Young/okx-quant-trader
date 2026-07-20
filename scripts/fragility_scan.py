@@ -427,9 +427,13 @@ def main():
                         help="Buy-and-hold 同期收益（百分比），用于 viability 比较。缺省 = ret>0")
     parser.add_argument("--name", required=True,
                         help="扫描名（用作输出目录前缀）")
-    parser.add_argument("--out-root", default="okx/docs/agent-context/experiments",
-                        help="输出根目录（默认 okx/docs/agent-context/experiments）")
+    parser.add_argument("--out-root", default=None,
+                        help="输出根目录（默认 = 仓库根的 docs/agent-context/experiments，与 cwd 无关）")
     args = parser.parse_args()
+
+    # 默认 out-root: 解析脚本所在位置（fragility_scan.py 在 okx/scripts/，故父级 = okx/）
+    if args.out_root is None:
+        args.out_root = str(Path(__file__).resolve().parent.parent / "docs" / "agent-context" / "experiments")
 
     strategy_full = resolve_strategy(args.strategy)
 
