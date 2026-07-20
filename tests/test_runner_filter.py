@@ -121,9 +121,14 @@ class TestFilterSkipPositionsNormalFlow:
         assert len(skipped) == 0
         assert kept[0]["strategy"] == "A_EMA20_BREAKOUT"
 
-    def test_all_four_strategies_kept(self):
-        for s in ["A_EMA20_BREAKOUT", "B_BB_RSI_REVERSION",
-                  "C_VOLATILITY_BREAKOUT", "D_FUNDING_RATE_REVERSAL"]:
+    def test_active_strategies_kept(self):
+        """v1.8.3+ (2026-07-20): 只测试 active 策略
+        - A (enabled=True): 保留
+        - C (enabled=True): 保留
+        - B (enabled=False, 永久禁用): 不再保留
+        - D (enabled=False, 永久禁用): 不再保留
+        """
+        for s in ["A_EMA20_BREAKOUT", "C_VOLATILITY_BREAKOUT"]:
             positions = [
                 {"symbol": "BTCUSDTSWAP", "strategy": s,
                  "sl_price": 64000.0, "tp_price": 66000.0},

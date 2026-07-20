@@ -29,6 +29,7 @@
 | v1.7 | 2026-07-15 | A+C double-lock + Phase 2 4 策略回测 milestone | 外部仓 auto-close footgun 修复（-3.99 USDT 事故）|
 | v1.8.1 | 2026-07-18 | §3 跨策略冲突过滤 + 摩擦成本校准 + K线驱动调度 | Telegram token 双写 + restart |
 | **v1.8.2** | **2026-07-18** | **Constitution §3.2 Kelly Criterion 动态仓位** | **B 策略 BTC 1h 27.8% WR → Kelly 自动 disabled** |
+| **v1.8.3+** | **2026-07-20** | **B 策略永久禁用（与 D 同 soft-disable 模式）** | **BTC 1h 17 月 baseline: WR=27.8% (36 trades), ret=-24.02%, Sharpe=-1.311, MaxDD=33.82%。v1.8 Fix A (EMA50/EMA200 趋势过滤) 已实施但不充分。Kelly f_full=-0.20 永久负值。代码保留 (`run_phase2_experiment.py:93`) + config gate `strategy_b.enabled=false` + 测试更新为 skip/False 断言。**新增 4 个 Chaos 测试**: active_probe_chaos (9) + api_chaos (14) + gap_crash_chaos (8) + fragility_scan path fix** |
 | **v1.8.3** | **2026-07-19** | **D 策略永久禁用 + 6 个 P0-P2 修复** | **fragility_scan 0 viable, config: `strategy_d.enabled=false`；watchdog 哨兵不再失灵 (`c9d5ef2`)** |
 | **v1.8.3+** | **2026-07-19** | **Gate 7 split 化（3+1 红线）+ live 第 1 周 BTC only 政策** | **BTC+ETH N=100 实证：Taker avg 1.42/0.14 bps（红线 8 bps 利用率 18%/2%），limit_fill_rate demo 30%/0% 不可达；split 化红线后 3/3 全过。Live 首周限制 `trading.live_first_week_btc_only=true` 防 ETH demo 流动性伪命题。** |
 
@@ -539,7 +540,7 @@ while page_count < max_pages:
 | 策略 | BTC ret | BTC Sharpe | ETH ret | ETH Sharpe | Trades | 关键发现 |
 |---|---|---|---|---|---|---|
 | **A_EMA20_BREAKOUT** | +1.21% | +0.119 | -12.18% | -0.619 | 32 / 34 tranche | BTC 微正 alpha，ETH 风控保护 |
-| **B_BB_RSI_REVERSION** | **-37.16%** | **-1.950** | -15.47% | -0.787 | 30 / 29 tranche | BTC 大牛市被反趋势打脸 |
+| ~~B_BB_RSI_REVERSION~~ | ~~-37.16%~~ | ~~-1.950~~ | ~~-15.47%~~ | ~~-0.787~~ | ~~30 / 29~~ | ⚠️ **已永久禁用 v1.8.3+ (2026-07-20)**：v1.8 baseline WR=27.8% |
 | **C_VOLATILITY_BREAKOUT** | **+2.87%** | **+0.208** | -1.19% | +0.039 | 47 / 62 tranche | **最佳策略**，跑赢 buy-and-hold |
 | ~~D_FUNDING_RATE_REVERSAL~~ | ~~+0.00%~~ | ~~+0.000~~ | ~~+0.00%~~ | ~~+0.000~~ | ~~0~~ | ⚠️ **已移除 v1.8.3+**：fragility_scan 0 viable，根因：funding 极罕见 + 8h结算错位 |
 | [BENCH] 1x_spot | -6.49% | +0.145 | -27.76% | +0.067 | — | BTC 现货基准 |

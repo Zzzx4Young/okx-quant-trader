@@ -14,7 +14,6 @@
     "max_concurrent_positions": 3,
     "emergency_stop": false,
     "demo_mode": true,
-    "_live_first_week_btc_only_comment": "v1.8.3+ Gate 7 split 教训: live 第一周仅允许 BTC, ETH 一周后开通 (ETH demo limit_fill_rate=0% 实证). 默认 false (demo 不启用). 切 live 前手动开为 true。",
     "live_first_week_btc_only": false
   },
   "risk": {
@@ -73,14 +72,14 @@
   },
   "strategy_b": {
     "name": "BB_RSI_REVERSION",
-    "enabled": true,
+    "enabled": false,
     "description": "震荡市左侧反转策略：BB 触轨 + RSI 极值 + 反转 K 线",
     "bb_period": 20,
     "bb_std": 1.4,
     "rsi_period": 14,
     "rsi_overbought": 60,
     "rsi_oversold": 40,
-    "_comment": "策略 B 的阈值已放宽到合理水平。信号未出是因为 close 在 BB 内部，未触轨（这是市场事实，不是策略问题）。"
+    "_comment": "⚠️ v1.8.3+ 永久禁用 (enabled=false). 1 次性 baseline 重试 (2026-07-20 21:08 CST) 实证：BTC 1h 17 月数据 WR=27.8% (36 trades), ret=-24.02%, Sharpe=-1.311, MaxDD=33.82%. v1.8 Fix A (EMA50/EMA200 趋势过滤) 已实施但不充分. Kelly f_full 永久负值 → 系统 auto-prevent. 原因：BTC 大窗口震荡反转假说在 trend 段持续被吞 (36 trades / 17 月 = 频率过低, 不可规模化). 代码保留 (strategy_b_bb_rsi_reversion in run_phase2_experiment.py:93) 作历史参考 + 防止 signal.py:252 AttributeError. 重启用: 改 true + 重跑 fragility_scan + 重跑 baseline (WR >= 50% + bars_held > 3)."
   },
   "strategy_c": {
     "name": "VOLATILITY_BREAKOUT",

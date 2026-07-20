@@ -24,7 +24,8 @@ class TestConstitutionConfig:
     """Constitution 配置项可正确加载"""
 
     def test_strategy_b_enabled(self, cfg):
-        assert cfg.strategy_b_enabled is True
+        # v1.8.3+ (2026-07-20): B 永久禁用 — config.enabled=false (Kelly f_full 永久负值)
+        assert cfg.strategy_b_enabled is False
 
     def test_strategy_c_enabled(self, cfg):
         assert cfg.strategy_c_enabled is True
@@ -210,7 +211,8 @@ class TestConfigVersion:
         assert cfg["version"] == "1.1.0"
         # v1.8.3+ (2026-07-19): updated_at 推近到 D 禁用日
         assert cfg["updated_at"] == "2026-07-19"
-        assert cfg["strategy_b"]["enabled"] is True
+        # v1.8.3+ (2026-07-20): B 永久禁用 — 与 D 同模式 (config.enabled=false + 块保留)
+        assert cfg["strategy_b"]["enabled"] is False
         assert cfg["strategy_c"]["enabled"] is True
-        # D 禁用后配置块仍保留 (gate 必须存在 config 字段)
+        # D + B 禁用后配置块仍保留 (gate 必须存在 config 字段)
         assert cfg["strategy_d"]["enabled"] is False
