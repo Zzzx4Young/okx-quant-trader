@@ -22,6 +22,11 @@ htmlcov/
 build/
 dist/
 
+# ─── JavaScript / Node（v1.2.0+ web/ frontend 新增）──────────
+# React + Vite + TypeScript 项目的本地依赖 + 缓存,绝对不入仓
+# dist/ 已被上面顶层 pattern 覆盖,这里只补 node_modules
+web/frontend/node_modules/
+
 # ─── 状态（账户级数据，分享出去无意义）──────────────
 # 跟踪 state/config.json（策略/风控参数，可版本化），
 # 排除含 posId / 仓位历史 / 实时状态的本地文件
