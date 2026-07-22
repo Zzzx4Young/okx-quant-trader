@@ -1,19 +1,46 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import {
+  AppShell,
+  Burger,
+  Group,
+  NavLink,
+  ScrollArea,
+  Text,
+  Title,
+  Badge,
+  Stack,
+  Divider,
+  Anchor,
+} from '@mantine/core'
+import { useDisclosure } from '@mantine/hooks'
 import { PortfolioPage } from './pages/Portfolio'
 import { CronPage } from './pages/Cron'
 import { QueryPage } from './pages/Query'
-import './index.css'
 
 type PageId = 'portfolio' | 'cron' | 'query'
 
 const NAV_ITEMS: Array<{
   id: PageId
   label: string
-  subtitle: string
+  description: string
+  badge?: string
 }> = [
-  { id: 'portfolio', label: 'Portfolio', subtitle: '持仓 + 历史' },
-  { id: 'cron', label: 'Cron', subtitle: '运行时 + drift' },
-  { id: 'query', label: 'Query', subtitle: '自然语言 (Phase 2b)' },
+  {
+    id: 'portfolio',
+    label: 'Portfolio',
+    description: '持仓 · 历史 · 累计 PnL',
+  },
+  {
+    id: 'cron',
+    label: 'Cron Health',
+    description: 'Drift · Heartbeat · Syncs',
+  },
+  {
+    id: 'query',
+    label: 'Query (AI)',
+    description: '自然语言查询 · Phase 2b',
+    badge: 'stub',
+  },
 ]
 
 const PAGE_TITLES: Record<PageId, string> = {
@@ -24,45 +51,99 @@ const PAGE_TITLES: Record<PageId, string> = {
 
 export default function App() {
   const [page, setPage] = useState<PageId>('portfolio')
+  const [opened, { toggle }] = useDisclosure()
 
-  // Title regression fix: sync document.title with current page.
   useEffect(() => {
     document.title = PAGE_TITLES[page] ?? 'OKX Web'
   }, [page])
 
   return (
-    <main>
-      <header>
-        <h1>OKX Web Dashboard</h1>
-        <p className="subtitle">
-          Phase 2 · v1.2.0 · 全只读 · bind 127.0.0.1:18787
-        </p>
-      </header>
+    <AppShell
+      header={{ height: 56 }}
+      navbar={{
+        width: 260,
+        breakpoint: 'sm',
+        collapsed: { mobile: !opened },
+      }}
+      padding="md"
+    >
+      <AppShell.Header>
+        <Group h="100%" px="md" justify="space-between">
+          <Group>
+            <Burger
+              opened={opened}
+              onClick={toggle}
+              hiddenFrom="sm"
+              size="sm"
+            />
+            <Title order={4}>OKX Web Dashboard</Title>
+            <Badge variant="light" color="blue" size="sm">
+              v1.3.0
+            </Badge>
+            <Badge variant="light" color="gray" size="sm">
+              bind 127.0.0.1:18787
+            </Badge>
+          </Group>
+          <Text size="xs" c="dimmed">
+            {new Date().toLocaleDateString('zh-CN', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+            })}
+          </Text>
+        </Group>
+      </AppShell.Header>
 
-      <nav className="tab-nav">
-        {NAV_ITEMS.map((item) => (
-          <button
-            key={item.id}
-            className={`tab ${page === item.id ? 'tab-active' : ''}`}
-            onClick={() => setPage(item.id)}
-          >
-            <span className="tab-label">{item.label}</span>
-            <span className="tab-subtitle">{item.subtitle}</span>
-          </button>
-        ))}
-      </nav>
+      <AppShell.Navbar p="sm">
+        <AppShell.Section>
+          <Text size="xs" c="dimmed" tt="uppercase" fw={700} mb="xs">
+            Pages
+          </Text>
+        </AppShell.Section>
+        <AppShell.Section grow component={ScrollArea}>
+          <Stack gap={4}>
+            {NAV_ITEMS.map((item) => (
+              <NavLink
+                key={item.id}
+                active={page === item.id}
+                label={item.label}
+                description={item.description}
+                rightSection={
+                  item.badge ? (
+                    <Badge size="xs" color="yellow" variant="light">
+                      {item.badge}
+                    </Badge>
+                  ) : null
+                }
+                onClick={() => {
+                  setPage(item.id)
+                  if (opened) toggle()
+                }}
+              />
+            ))}
+          </Stack>
+        </AppShell.Section>
+        <Divider my="sm" />
+        <AppShell.Section>
+          <Text size="xs" c="dimmed">
+            全只读 · 后端 uvicorn 单进程 serve <br />
+            <Anchor
+              size="xs"
+              href="https://api.minimaxi.com"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Phase 2b · api.minimaxi.com
+            </Anchor>
+          </Text>
+        </AppShell.Section>
+      </AppShell.Navbar>
 
-      <section className="page-content">
+      <AppShell.Main>
         {page === 'portfolio' && <PortfolioPage />}
         {page === 'cron' && <CronPage />}
         {page === 'query' && <QueryPage />}
-      </section>
-
-      <footer>
-        <p>
-          See <code>okx/docs/WEB_DASHBOARD_DESIGN.md</code> · v1 LOCKED 2026-07-21.
-        </p>
-      </footer>
-    </main>
+      </AppShell.Main>
+    </AppShell>
   )
 }

@@ -1,3 +1,3 @@
 fastapi>=0.110
 uvicorn[standard]>=0.27
-httpx>=0.27  # Phase 2b /api/query → api.minimaxi.com 调用
+httpx[socks]>=0.27  # Phase 2b /api/query → api.minimaxi.com; F (2026-07-22) also needs SOCKS for OKX V5 via ALL_PROXY=socks5h://...

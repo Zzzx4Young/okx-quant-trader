@@ -1,4 +1,19 @@
 import { useState } from 'react'
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Code,
+  Divider,
+  Grid,
+  Group,
+  Loader,
+  Stack,
+  Text,
+  Textarea,
+  Title,
+} from '@mantine/core'
 
 type QueryResponse = {
   ok: boolean
@@ -45,82 +60,148 @@ export function QueryPage() {
   }
 
   return (
-    <div>
-      <h2>Query &mdash; 自然语言查询持仓</h2>
-      <p className="muted">
-        Phase 2a: keyword-routed stub (BTC / ETH / PnL / 策略 / 持仓).{' '}
-        Phase 2b: LLM integration via api.minimaxi.com — once creds + model
-        wired.
-      </p>
+    <Stack gap="lg">
+      <div>
+        <Title order={2}>Query · 自然语言查询持仓</Title>
+        <Text size="sm" c="dimmed" mt={4}>
+          Phase 2a: keyword-routed stub. Phase 2b: LLM via api.minimaxi.com —
+          active when <Code>OKX_WEB_LLM_API_KEY</Code> is configured.
+        </Text>
+      </div>
 
-      <div className="query-form">
-        <input
-          type="text"
-          className="query-input"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
+      <Card withBorder shadow="sm" padding="md">
+        <Textarea
           placeholder="输入 query,例如 'BTC 仓位'"
+          value={query}
+          onChange={(e) => setQuery(e.currentTarget.value)}
+          autosize
+          minRows={2}
+          maxRows={4}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !loading) submit(query)
+            if (
+              e.key === 'Enter' &&
+              (e.metaKey || e.ctrlKey) &&
+              !loading
+            ) {
+              submit(query)
+            }
           }}
         />
-        <button
-          className="query-button"
-          onClick={() => submit(query)}
-          disabled={loading || !query.trim()}
-        >
-          {loading ? '...' : '提交'}
-        </button>
-      </div>
-
-      <div className="sample-queries">
-        <span className="muted">样例:</span>
-        {SAMPLE_QUERIES.map((q, i) => (
-          <button
-            key={i}
-            className="sample-chip"
-            onClick={() => submit(q)}
-            disabled={loading}
+        <Group justify="space-between" mt="sm">
+          <Text size="xs" c="dimmed">
+            ⌘/Ctrl + Enter 提交
+          </Text>
+          <Button
+            loading={loading}
+            disabled={!query.trim()}
+            onClick={() => submit(query)}
           >
-            {q}
-          </button>
-        ))}
-      </div>
+            提交
+          </Button>
+        </Group>
+      </Card>
+
+      <Card withBorder shadow="sm" padding="md">
+        <Text size="sm" c="dimmed" mb="xs">
+          样例 queries:
+        </Text>
+        <Group gap="xs">
+          {SAMPLE_QUERIES.map((q, i) => (
+            <Button
+              key={i}
+              variant="default"
+              size="xs"
+              radius="xl"
+              onClick={() => submit(q)}
+              disabled={loading}
+            >
+              {q}
+            </Button>
+          ))}
+        </Group>
+      </Card>
 
       {error && (
-        <div className="error">
-          <h3>Error</h3>
-          <pre>{error}</pre>
-        </div>
+        <Alert color="red" title="Fetch error">
+          <pre style={{ margin: 0 }}>{error}</pre>
+        </Alert>
       )}
 
-      {response && (
-        <div className="query-response">
-          <h3>Response</h3>
-          <dl>
-            <dt>intent</dt>
-            <dd>
-              <span className="tag tag-blue">{response.intent}</span>
-            </dd>
-            <dt>query</dt>
-            <dd>
-              <code>{response.query}</code>
-            </dd>
-            <dt>answer</dt>
-            <dd>{response.answer}</dd>
-            <dt>version</dt>
-            <dd className="muted">{response.version}</dd>
-            {Object.keys(response.extras).length > 0 && (
-              <>
-                <dt>extras</dt>
-                <dd>
-                  <pre>{JSON.stringify(response.extras, null, 2)}</pre>
-                </dd>
-              </>
-            )}
-          </dl>
-        </div>
+      {loading && (
+        <Card withBorder shadow="sm" padding="md">
+          <Group>
+            <Loader size="sm" />
+            <Text c="dimmed">查询中…</Text>
+          </Group>
+        </Card>
       )}
-    </div>
+
+      {response && !loading && (
+        <Card withBorder shadow="sm" padding="md">
+          <Group justify="space-between" mb="xs">
+            <Title order={4}>Response</Title>
+            <Group gap="xs">
+              <Badge color="blue" variant="light">
+                intent: {response.intent}
+              </Badge>
+              <Badge
+                color={response.ok ? 'green' : 'red'}
+                variant="light"
+              >
+                {response.ok ? 'ok' : 'failed'}
+              </Badge>
+              <Text size="xs" c="dimmed">
+                v{response.version}
+              </Text>
+            </Group>
+          </Group>
+
+          <Grid>
+            <Grid.Col span={{ base: 12, md: 4 }}>
+              <Stack gap={4}>
+                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
+                  query
+                </Text>
+                <Code block>{response.query}</Code>
+              </Stack>
+            </Grid.Col>
+            <Grid.Col span={{ base: 12, md: 8 }}>
+              <Stack gap={4}>
+                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
+                  answer
+                </Text>
+                <Text style={{ whiteSpace: 'pre-wrap' }}>
+                  {response.answer}
+                </Text>
+              </Stack>
+            </Grid.Col>
+          </Grid>
+
+          {Object.keys(response.extras).length > 0 && (
+            <>
+              <Divider my="md" />
+              <Stack gap={4}>
+                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
+                  extras
+                </Text>
+                <pre
+                  style={{
+                    background: 'var(--mantine-color-dark-7)',
+                    padding: 12,
+                    borderRadius: 6,
+                    fontSize: 12,
+                    margin: 0,
+                    maxHeight: 320,
+                    overflow: 'auto',
+                  }}
+                >
+                  {JSON.stringify(response.extras, null, 2)}
+                </pre>
+              </Stack>
+            </>
+          )}
+        </Card>
+      )}
+    </Stack>
   )
 }

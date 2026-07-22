@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OKX Web Dashboard — production launcher (Phase 2c).
+# OKX Web Dashboard — production launcher (v1.3.0).
 #
 # Single uvicorn on 127.0.0.1:18787:
 # - serves /api/* (FastAPI routes)
@@ -16,6 +16,17 @@ export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 WEB_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$WEB_DIR"
+
+# Load OKX credentials from .env so backend can call OKX V5 for risk_metrics.
+# Without this, _okx_creds() returns None and /api/portfolio's risk_metrics
+# returns source="unavailable". .env is the single source of truth per
+# Constitution (okx-trading-conventions skill). Added 2026-07-22 for F.
+if [ -f ../.env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source ../.env
+    set +a
+fi
 
 # Verify build artifact exists. Bail early if missing.
 if [ ! -d frontend/dist ]; then

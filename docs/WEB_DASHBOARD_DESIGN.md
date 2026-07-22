@@ -274,6 +274,48 @@ Phase 2 验收通过 Strategy + Analytics。
 
 ---
 
+## §10 v1.3 changelog (2026-07-22)
+
+**Nixil approved 架构扩张 2026-07-22**：v1 LOCKED "zero-side-effect file reads only" 原则**对 /api/portfolio 失效**。
+
+### What changed
+
+| 维度 | v1 (LOCKED 2026-07-21) | v1.3 (2026-07-22) |
+|---|---|---|
+| 后端数据源 | 仅本地 `okx/state/*.json` | 本地 + OKX V5 GET endpoints |
+| `/api/portfolio` 内容 | active + closed + summary | **+ risk_metrics**（equity / notional / leverage / concentration / liq distance） |
+| 缓存策略 | 无 | `state/risk_metrics_cache.json`（60s TTL） |
+| `/api/cron` drift | `drift_seconds` + `fallback_used` | **+ `drift_status: on_time / early / late`**（3 态语义） |
+| 前端 UI 库 | 手写 CSS（GitHub Primer Dark） | **Mantine v7**（AppShell 侧栏 + 6 metric cards + drift 3-state card） |
+| Proxy 路径 | 文文不验证 | SOCKS5 (`httpx[socks]>=0.27`) |
+| Drift 早边界检测 | 漏 | `abs(drift) > 240s` → fallback |
+
+### 风险与缓释
+
+- 后端现在有 OKX API 调用 + 文件缓存写入（透明，60s TTL）
+- OKX 调用**仅 GET**，无订单 / 仓位修改
+- POST `/api/query` 仍无 OKX side-effect（仅可选外部 LLM）
+- 单 `.env` 是 Constitution 约定的凭据模式（其他 OKX 工具同用）
+
+### Lessons learned（完整 post-mortem `memory/2026-07-22.md`）
+
+1. **OKX timestamp 格式严格匹配 `Z`**：`datetime.isoformat()` 产 `+00:00` → 401。必须 `strftime + "{ms:03d}Z"`
+2. **`httpx` + SOCKS 需 `httpx[socks]`**：否则 `Using SOCKS proxy, but the 'socksio' package is not installed`
+3. **systemd 不继承 shell env**：`run-prod.sh` 必须显式 `source ../.env`
+4. **OKX 返 `notionalUsd` 直接字段**：不必自己算 `|pos| × ctVal × markPx`
+5. **Cross-margin 仓 `liqPx=""`**：用 `_safe_float(..., default=0.0) or None` 模式跳过
+6. **OKX 端 SSL EOF 是常见抖动**：3-retry + exponential backoff（0.5s / 1.0s）
+
+### 顺带 ship 的 v2 原计划
+
+设计 §6 Phase 3 的 "Charts: drift 时间序列 / win-rate / P&L 曲线"：
+- **drift 时序 AreaChart 已 ship**（Cron 页）
+- **Cumulative PnL LineChart 已 ship**（Portfolio 页）
+
+Phase 3 只剩 SSE 实时推送 + SQLite 历史快照未做（v2 milestone）。
+
+---
+
 ## 附录 A: 反向论证(为什么不选这些)
 
 | 不选项 | 不选原因 |
