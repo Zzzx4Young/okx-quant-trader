@@ -599,7 +599,7 @@ async def health() -> Dict[str, Any]:
     return {
         "status": "ok",
         "service": "okx-web",
-        "version": "1.4.0",
+        "version": app.version,
         "phase": "2c-prod",
         "now": datetime.now().astimezone().isoformat(timespec="seconds"),
         "llm": {
@@ -1114,6 +1114,140 @@ async def backtest_cell_equity(run_id: str, cell_label: str) -> Dict[str, Any]:
         "end_ts": timestamps[-1] if timestamps else None,
         "timestamp": timestamps,
         "equity": equities,
+    }
+
+
+@app.get("/api/backtest/runs/{run_id}/cells/{cell_label}/trades")
+async def backtest_cell_trades(run_id: str, cell_label: str) -> Dict[str, Any]:
+    """单个 cell 的逐笔交易列表（trades.parquet → JSON）。Phase 2A: trade inspector。
+
+    返回 trades 数据结构（trades.parquet 列 + fills_json），供前端 Modal 渲染：
+    - entry_ts / exit_ts：UTC ms 时间戳
+    - entry_price / entry_fill_price：策略入场 vs 含滑点实际成交
+    - direction：long/short
+    - gross_pnl / funding_fee / fee / slippage_cost / net_pnl：PnL 拆解
+    - exit_reason：all_tp_hit / sl_full / signal_reverse / end_of_data
+    - bars_held / n_fills / fills_json：fills 完整生命周期（JSON 字符串）
+    """
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", run_id):
+        raise HTTPException(status_code=400, detail=f"invalid run_id: {run_id}")
+    if not re.fullmatch(r"slip\d+_fee\d+p\d+", cell_label):
+        raise HTTPException(status_code=400, detail=f"invalid cell_label: {cell_label}")
+    trades_path = EXPERIMENTS_DIR / run_id / "cells" / cell_label / "trades.parquet"
+    if not trades_path.exists():
+        raise HTTPException(status_code=404, detail=f"trades.parquet missing: {run_id}/{cell_label}")
+    data = _load_parquet_cached(trades_path)
+    if data is None:
+        raise HTTPException(status_code=503, detail=f"trades.parquet unreadable: {run_id}/{cell_label}")
+    entry_ts = data.get("entry_ts") or []
+    return {
+        "run_id": run_id,
+        "cell_label": cell_label,
+        "n_trades": len(entry_ts),
+        **data,  # spread all columns: entry_ts / exit_ts / direction / entry_price / entry_fill_price / initial_size / leverage / margin / gross_pnl / funding_fee / fee / slippage_cost / net_pnl / strategy / exit_reason / bars_held / n_fills / fills_json
+    }
+
+
+# ────────────────────────────────────────────────────────────────────
+# Phase 2B: K-line + signal markers (lightweight-charts frontend)
+# 合并 data/market/{symbol}/{bar}.parquet + trades.parquet entry_ts
+# ────────────────────────────────────────────────────────────────────
+KLINE_DATA_ROOT = OKX_ROOT / "data" / "market"
+
+
+@app.get("/api/backtest/runs/{run_id}/cells/{cell_label}/kline-with-signals")
+async def backtest_cell_kline_with_signals(
+    run_id: str, cell_label: str
+) -> Dict[str, Any]:
+    """单个 cell 的 K-line 蜡烛 + 策略信号 markers（lightweight-charts 格式）。
+
+    数据源：
+    - K-line: `okx/data/market/{symbol}/{bar}.parquet`（来自 meta.json 的 symbol + bar）
+    - Markers: trades.parquet 的 entry_ts + direction
+
+    返回 JSON 结构（与 lightweight-charts API 一致）：
+    - candles: [{time(秒), open, high, low, close, volume}]
+    - markers: [{time(秒), position(aboveBar/belowBar), color, shape(arrowUp/arrowDown), text}]
+
+    时间转换：parquet 内 ms → lightweight-charts 需要秒（UTC）。
+    """
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", run_id):
+        raise HTTPException(status_code=400, detail=f"invalid run_id: {run_id}")
+    if not re.fullmatch(r"slip\d+_fee\d+p\d+", cell_label):
+        raise HTTPException(status_code=400, detail=f"invalid cell_label: {cell_label}")
+
+    # 1. 读 meta 拿 symbol + bar
+    meta = _load_meta_cached(EXPERIMENTS_DIR / run_id / "meta.json")
+    if meta is None:
+        raise HTTPException(status_code=503, detail=f"meta.json missing: {run_id}")
+    symbol = meta.get("symbol")
+    bar = meta.get("bar")
+    if not symbol or not bar:
+        raise HTTPException(
+            status_code=503,
+            detail=f"meta missing symbol/bar: {run_id} (symbol={symbol}, bar={bar})",
+        )
+
+    # 2. 读 kline parquet
+    kline_path = KLINE_DATA_ROOT / symbol / f"{bar}.parquet"
+    if not kline_path.exists():
+        raise HTTPException(
+            status_code=404, detail=f"kline parquet missing: {kline_path}"
+        )
+    try:
+        kline_table = pq.read_table(kline_path)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"kline read failed: {e}")
+    kline_df = kline_table.to_pandas()
+
+    # 3. 读 trades parquet（markers 源；可能缺）
+    trades_path = EXPERIMENTS_DIR / run_id / "cells" / cell_label / "trades.parquet"
+    trades_df = None
+    if trades_path.exists():
+        try:
+            trades_df = pq.read_table(trades_path).to_pandas()
+        except Exception:
+            trades_df = None
+
+    # 4. 构建 candles 数组（time 转秒）
+    candles = []
+    for _, row in kline_df.iterrows():
+        candles.append({
+            "time": int(row["timestamp"]) // 1000,  # ms → s
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "volume": float(row.get("volume", 0) or 0),
+        })
+
+    # 5. 构建 markers 数组（每个 trade 一个 entry 标记）
+    markers = []
+    if trades_df is not None and len(trades_df) > 0:
+        for _, t in trades_df.iterrows():
+            direction = str(t.get("direction", "long"))
+            entry_ts = int(t.get("entry_ts", 0) or 0)
+            if entry_ts <= 0:
+                continue
+            markers.append({
+                "time": entry_ts // 1000,  # ms → s
+                "position": "belowBar" if direction == "long" else "aboveBar",
+                "color": "#26a69a" if direction == "long" else "#ef5350",  # green / red
+                "shape": "arrowUp" if direction == "long" else "arrowDown",
+                "text": "L" if direction == "long" else "S",
+            })
+
+    return {
+        "run_id": run_id,
+        "cell_label": cell_label,
+        "symbol": symbol,
+        "bar": bar,
+        "n_candles": len(candles),
+        "n_markers": len(markers),
+        "start_ts": int(kline_df["timestamp"].iloc[0]),
+        "end_ts": int(kline_df["timestamp"].iloc[-1]),
+        "candles": candles,
+        "markers": markers,
     }
 
 
