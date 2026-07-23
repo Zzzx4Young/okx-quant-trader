@@ -9,6 +9,7 @@ import {
   Group,
   Loader,
   ScrollArea,
+  SimpleGrid,
   Stack,
   Table,
   Text,
@@ -17,6 +18,7 @@ import {
 } from '@mantine/core'
 import { LineChart } from '@mantine/charts'
 import dayjs from 'dayjs'
+import { Heatmap } from '../components/Heatmap'
 
 type RunSummary = {
   id: string
@@ -28,6 +30,8 @@ type RunSummary = {
   bar: string | null
   leverage: number | null
   buy_hold_ret_pct: number | null
+  slippage_bps_list: number[]  // Phase 2C: bar-axis heatmap 需要
+  fee_bps_list: number[]
   n_cells: number
   viable_count: number
   best_ret_pct: number | null
@@ -43,13 +47,21 @@ type CellSummary = {
   maxDD_pct: number | null
   trades: number | null
   win_rate_pct: number | null
+  slip_cost: number | null   // Phase 2C: 与 HeatmapCell 对齐
+  fee_paid: number | null
   viable: boolean | null
   has_equity: boolean
+  has_trades: boolean
 }
 
 type RunComparison = {
   run: RunSummary
   firstCell: CellSummary | null
+  cells: CellSummary[]  // Phase 2C: 完整 cells 列表用于 bar-axis heatmap
+  meta: {
+    slippage_bps_list: number[]
+    fee_bps_list: number[]
+  }
   equity: { time: string; equity: number }[]
   loading: boolean
   error: string | null
@@ -102,12 +114,16 @@ export function BacktestComparePage({
               bar: null,
               leverage: null,
               buy_hold_ret_pct: null,
+              slippage_bps_list: [],
+              fee_bps_list: [],
               n_cells: 0,
               viable_count: 0,
               best_ret_pct: null,
               best_sharpe: null,
             },
             firstCell: null,
+            cells: [],
+            meta: { slippage_bps_list: [], fee_bps_list: [] },
             equity: [],
             loading: true,
             error: null,
@@ -131,6 +147,10 @@ export function BacktestComparePage({
           ])
           if (cancelled) return
           const cells: CellSummary[] = cellsJson.cells ?? []
+          const fetchedMeta = {
+            slippage_bps_list: metaJson.slippage_bps_list ?? [],
+            fee_bps_list: metaJson.fee_bps_list ?? [],
+          }
           // Use first cell as representative (slippage_bps_list[0] × fee_bps_list[0])
           const firstCell = cells[0] ?? null
           setComps((prev) => ({
@@ -147,6 +167,8 @@ export function BacktestComparePage({
                 bar: metaJson.bar ?? null,
                 leverage: metaJson.leverage ?? null,
                 buy_hold_ret_pct: metaJson.buy_hold_ret_pct ?? null,
+                slippage_bps_list: fetchedMeta.slippage_bps_list,
+                fee_bps_list: fetchedMeta.fee_bps_list,
                 n_cells: cells.length,
                 viable_count: cells.filter((c) => c.viable).length,
                 best_ret_pct:
@@ -159,6 +181,8 @@ export function BacktestComparePage({
                     : null,
               },
               firstCell,
+              cells,
+              meta: fetchedMeta,
               loading: true,
               error: null,
             },
@@ -467,6 +491,54 @@ export function BacktestComparePage({
               </Table.Tbody>
             </Table>
           </ScrollArea>
+        </Card>
+      )}
+
+      {/* ── Bar-axis mini-heatmaps (Phase 2C) ── */}
+      {runIds.length > 0 && runIds.some((id) => (comps[id]?.cells.length ?? 0) > 0) && (
+        <Card withBorder shadow="sm" padding="md">
+          <Title order={4} mb="xs">
+            Bar-axis Mini-heatmaps
+            <Text component="span" size="sm" c="dimmed" ml="sm">
+              one per selected run ·{' '}
+              {new Set(runIds.map((id) => comps[id]?.run.bar).filter(Boolean)).size} distinct bars
+            </Text>
+          </Title>
+          <SimpleGrid cols={{ base: 1, md: 2, lg: 3 }} spacing="md">
+            {runIds.map((id) => {
+              const c = comps[id]
+              if (!c || c.cells.length === 0) return null
+              const seriesIdx = runIds.indexOf(id)
+              const color = SERIES_COLORS[seriesIdx % SERIES_COLORS.length]
+              return (
+                <Card key={id} withBorder padding="sm">
+                  <Group gap="xs" mb="xs" wrap="nowrap">
+                    <div
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: 2,
+                        backgroundColor: `var(--mantine-color-${color.replace('.', '-')})`,
+                      }}
+                    />
+                    <Text fw={600} size="sm" truncate style={{ flex: 1 }}>
+                      {c.run.name}
+                    </Text>
+                    <Badge variant="light" size="xs">{c.run.bar}</Badge>
+                  </Group>
+                  <Heatmap
+                    meta={c.meta}
+                    cells={c.cells}
+                    compact
+                    interactive={false}
+                  />
+                  <Text size="xs" c="dimmed" mt="xs">
+                    {c.cells.filter((x) => x.viable).length}/{c.cells.length} viable cells
+                  </Text>
+                </Card>
+              )
+            })}
+          </SimpleGrid>
         </Card>
       )}
 

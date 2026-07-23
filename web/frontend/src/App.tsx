@@ -30,6 +30,8 @@ type RunSummary = {
   bar: string | null
   leverage: number | null
   buy_hold_ret_pct: number | null
+  slippage_bps_list: number[]  // Phase 2C: bar-axis heatmap 需要（与 BacktestCompare 对齐）
+  fee_bps_list: number[]
   n_cells: number
   viable_count: number
   best_ret_pct: number | null

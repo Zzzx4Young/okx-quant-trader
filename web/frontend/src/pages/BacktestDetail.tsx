@@ -14,7 +14,6 @@ import {
   Tabs,
   Text,
   Title,
-  Tooltip,
 } from '@mantine/core'
 import { LineChart } from '@mantine/charts'
 import dayjs from 'dayjs'
@@ -23,6 +22,7 @@ import {
   type Candle as KlineCandle,
   type Marker as KlineMarker,
 } from '../components/KlineChart'
+import { Heatmap } from '../components/Heatmap'
 
 type CellSummary = {
   label: string
@@ -83,23 +83,6 @@ function tone(n: number | null | undefined): 'red' | 'green' | undefined {
   if (n < 0) return 'red'
   if (n > 0) return 'green'
   return undefined
-}
-
-// Map ret_pct to Mantine color shade (3 levels per side).
-// Returns CSS var name like "var(--mantine-color-red-6)" or null.
-function heatColor(ret: number | null | undefined): string | null {
-  if (ret == null) return null
-  const mag = Math.abs(ret)
-  if (ret > 0) {
-    if (mag >= 5) return 'var(--mantine-color-green-8)'
-    if (mag >= 2) return 'var(--mantine-color-green-6)'
-    return 'var(--mantine-color-green-4)'
-  } else if (ret < 0) {
-    if (mag >= 5) return 'var(--mantine-color-red-8)'
-    if (mag >= 2) return 'var(--mantine-color-red-6)'
-    return 'var(--mantine-color-red-4)'
-  }
-  return 'var(--mantine-color-gray-5)'
 }
 
 export function BacktestDetailPage({ runId, onBack, onAddToCompare }: Props) {
@@ -303,12 +286,6 @@ export function BacktestDetailPage({ runId, onBack, onAddToCompare }: Props) {
     return out
   }, [equity])
 
-  const cellByLabel = useMemo(() => {
-    const m = new Map<string, CellSummary>()
-    for (const c of cells) m.set(c.label, c)
-    return m
-  }, [cells])
-
   return (
     <Stack gap="lg">
       <Group justify="space-between" align="flex-end">
@@ -390,101 +367,14 @@ export function BacktestDetailPage({ runId, onBack, onAddToCompare }: Props) {
                 click cell for equity curve
               </Text>
             </Title>
-            <div style={{ overflowX: 'auto' }}>
-              <Table withTableBorder withColumnBorders>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th style={{ backgroundColor: 'var(--mantine-color-dark-7)' }}>
-                      fee ↓ \ slip →
-                    </Table.Th>
-                    {meta.slippage_bps_list.map((slip) => (
-                      <Table.Th
-                        key={slip}
-                        style={{
-                          textAlign: 'center',
-                          backgroundColor: 'var(--mantine-color-dark-7)',
-                        }}
-                      >
-                        {slip} bps
-                      </Table.Th>
-                    ))}
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {meta.fee_bps_list.map((fee) => (
-                    <Table.Tr key={fee}>
-                      <Table.Th
-                        style={{
-                          backgroundColor: 'var(--mantine-color-dark-7)',
-                          textAlign: 'center',
-                        }}
-                      >
-                        {fee.toFixed(1)} bps
-                      </Table.Th>
-                      {meta.slippage_bps_list.map((slip) => {
-                        const label = `slip${slip}_fee${fee.toFixed(1)}`.replace(
-                          '.',
-                          'p',
-                        )
-                        const cell = cellByLabel.get(label)
-                        const ret = cell?.ret_pct
-                        const bg = heatColor(ret)
-                        const viable = cell?.viable
-                        return (
-                          <Table.Td
-                            key={slip}
-                            style={{
-                              backgroundColor: bg ?? 'var(--mantine-color-dark-9)',
-                              cursor: cell?.has_equity ? 'pointer' : 'default',
-                              textAlign: 'center',
-                              padding: '10px 14px',
-                              opacity: cell?.has_equity ? 1 : 0.5,
-                            }}
-                            onClick={() => {
-                              if (cell?.has_equity) setSelectedCell(cell)
-                            }}
-                          >
-                            {cell ? (
-                              <Tooltip
-                                label={
-                                  <div style={{ fontSize: 11 }}>
-                                    <div>ret: {fmtPct(ret, 3)}</div>
-                                    <div>sharpe: {cell.sharpe?.toFixed(3) ?? '-'}</div>
-                                    <div>trades: {cell.trades ?? '-'}</div>
-                                    <div>viable: {viable ? '✅' : '❌'}</div>
-                                  </div>
-                                }
-                                withArrow
-                              >
-                                <Stack gap={0} align="center">
-                                  <Text
-                                    size="sm"
-                                    fw={700}
-                                    c={bg && bg.includes('green') ? 'white' : bg && bg.includes('red') ? 'white' : undefined}
-                                  >
-                                    {fmtPct(ret, 2)}
-                                  </Text>
-                                  <Text
-                                    size="xs"
-                                    c={bg && bg.includes('green') ? 'white' : bg && bg.includes('red') ? 'white' : 'dimmed'}
-                                  >
-                                    {viable ? '✓ viable' : '✗'}
-                                  </Text>
-                                </Stack>
-                              </Tooltip>
-                            ) : (
-                              <Text size="xs" c="dimmed">
-                                N/A
-                              </Text>
-                            )}
-                          </Table.Td>
-                        )
-                      })}
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </div>
+            <Heatmap
+              meta={{
+                slippage_bps_list: meta.slippage_bps_list,
+                fee_bps_list: meta.fee_bps_list,
+              }}
+              cells={cells}
+              onCellClick={(cell: CellSummary) => setSelectedCell(cell)}
+            />
           </Card>
 
           {/* ── Top cells summary ── */}
