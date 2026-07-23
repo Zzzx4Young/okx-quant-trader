@@ -37,10 +37,13 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
+
+import pandas as pd
 
 # ────────────────────────────────────────────────────────────────────
 # 路径处理：把项目根加入 sys.path，让 okx 包可导入
@@ -109,8 +112,12 @@ def run_one(
     fee_bps: float,
     leverage: int,
     initial_capital: float,
-) -> Dict:
-    """跑一次回测，返回单 cell 指标。"""
+) -> Tuple[Dict, List[Tuple[int, float]], List]:
+    """跑一次回测，返回 (summary, equity_curve, trades)。
+
+    equity_curve: List[(timestamp_ms, equity_value)] —— 时间序列用于画权益曲线
+    trades: List[Trade] —— 完整交易列表（含 fills），用于交易明细
+    """
     data = load(inst_id, bar)
     sig = STRATEGIES[strategy_full]
     fee_rate = fee_bps / 10000.0
@@ -124,7 +131,7 @@ def run_one(
     )
     result = engine.run()
     m = result.metrics()
-    return {
+    summary = {
         "inst": inst_id,
         "bar": bar,
         "strategy": strategy_full,
@@ -140,6 +147,8 @@ def run_one(
         "slip_cost": round(result.slippage_cost_total, 2),
         "fee_paid": round(result.fee_paid_total, 2),
     }
+    # Phase 0.2: 同时返回 equity_curve + trades 用于后续 parquet 落盘
+    return summary, result.equity_curve, result.trades
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -153,15 +162,21 @@ def grid_scan(
     fee_bps_list: List[float],
     leverage: int,
     initial_capital: float,
-) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+) -> Tuple[List[Dict], List[Dict], List[Dict], List[Tuple[int, float, List, List]]]:
     """
     跑 slippage × fee 完整网格。
-    返回 (单轴 slippage 扫描 / 单轴 fee 扫描 / 完整网格)。
+    返回 (单轴 slippage 扫描 / 单轴 fee 扫描 / 完整网格 / per-cell 原始数据)。
+
+    per-cell 原始数据: List[(slip_bps, fee_bps, equity_curve, trades)]
+    用于后续 parquet 落盘，让前端能画权益曲线 + 交易明细。
     """
     grid: List[Dict] = []
+    cell_data: List[Tuple[int, float, List, List]] = []
     for slip in slippage_bps_list:
         for fee in fee_bps_list:
-            grid.append(run_one(inst_id, bar, strategy_full, slip, fee, leverage, initial_capital))
+            summary, equity, trades = run_one(inst_id, bar, strategy_full, slip, fee, leverage, initial_capital)
+            grid.append(summary)
+            cell_data.append((slip, fee, equity, trades))
 
     # 单轴结果（取 fee 列表第一个作为 slippage 扫描的常量）
     fee_const = fee_bps_list[0]
@@ -171,7 +186,7 @@ def grid_scan(
     slip_const = slippage_bps_list[0]
     fee_axis = [r for r in grid if r["slippage_bps"] == slip_const]
 
-    return slip_axis, fee_axis, grid
+    return slip_axis, fee_axis, grid, cell_data
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -345,6 +360,82 @@ def render_text_log(
     return "\n".join(lines)
 
 
+
+
+# ────────────────────────────────────────────────────────────────────
+# Per-cell parquet 持久化（Phase 0.2：让前端能画 equity + trades）
+# ────────────────────────────────────────────────────────────────────
+def _safe_git_commit() -> str:
+    """获取 okx repo HEAD commit hash。
+
+    fragility_scan.py 自身在 okx repo 里（_HERE.parents[1] = okx/）；
+    不能用 _PROJECT_ROOT（workspace 根），那样会抓到 workspace 的 HEAD，
+    与本次回测实际使用的代码版本不一致。
+    失败返回 'unknown'（不让 git 错误阻塞扫描）。
+    """
+    try:
+        okx_root = _HERE.parents[1]  # okx/scripts/fragility_scan.py → okx/
+        return subprocess.check_output(
+            ["git", "-C", str(okx_root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return "unknown"
+
+
+def _persist_cell_parquet(cell_dir: Path, equity_curve: List, trades: List) -> None:
+    """单 cell 落盘：equity.parquet (时间序列) + trades.parquet (逐笔交易)。"""
+    cell_dir.mkdir(parents=True, exist_ok=True)
+
+    # equity.parquet: columns = [timestamp, equity]
+    eq_df = pd.DataFrame(equity_curve, columns=["timestamp", "equity"])
+    eq_df["timestamp"] = eq_df["timestamp"].astype("int64")
+    eq_df["equity"] = eq_df["equity"].astype("float64")
+    eq_df.to_parquet(cell_dir / "equity.parquet", index=False, compression="snappy")
+
+    # trades.parquet: 每个 trade 一行，fills 序列化为 JSON 字符串保留完整生命周期
+    if trades:
+        trades_records = []
+        for t in trades:
+            rec = {
+                "entry_ts": t.entry_ts,
+                "exit_ts": t.exit_ts,
+                "direction": t.direction,
+                "entry_price": t.entry_price,
+                "entry_fill_price": t.entry_fill_price,
+                "initial_size": t.initial_size,
+                "leverage": t.leverage,
+                "margin": t.margin,
+                "gross_pnl": t.gross_pnl,
+                "funding_fee": t.funding_fee,
+                "fee": t.fee,
+                "slippage_cost": t.slippage_cost,
+                "net_pnl": t.net_pnl,
+                "strategy": t.strategy,
+                "exit_reason": t.exit_reason,
+                "bars_held": t.bars_held,
+                "n_fills": len(t.fills),
+                "fills_json": json.dumps(
+                    [{"type": f.fill_type, "price": f.fill_price, "size": f.fill_size,
+                      "ts": f.fill_ts, "nominal": f.nominal_value, "tranche_ratio": f.tranche_ratio}
+                     for f in t.fills],
+                    ensure_ascii=False,
+                ),
+            }
+            trades_records.append(rec)
+        trades_df = pd.DataFrame(trades_records)
+        trades_df.to_parquet(cell_dir / "trades.parquet", index=False, compression="snappy")
+    else:
+        # 无交易时写空 schema，保持 API 一致
+        pd.DataFrame(columns=[
+            "entry_ts","exit_ts","direction","entry_price","entry_fill_price",
+            "initial_size","leverage","margin","gross_pnl","funding_fee","fee",
+            "slippage_cost","net_pnl","strategy","exit_reason","bars_held",
+            "n_fills","fills_json",
+        ]).to_parquet(cell_dir / "trades.parquet", index=False, compression="snappy")
+
+
 # ────────────────────────────────────────────────────────────────────
 # 持久化
 # ────────────────────────────────────────────────────────────────────
@@ -362,9 +453,13 @@ def persist(
     slip_axis: List[Dict],
     fee_axis: List[Dict],
     grid: List[Dict],
+    cell_data: List[Tuple[int, float, List, List]],
     timestamp: str,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 0. 抓 git commit（Phase 0.2：可复现性证据）
+    git_commit = _safe_git_commit()
 
     # 1. result.md（人类阅读）
     md = render_markdown(
@@ -394,13 +489,21 @@ def persist(
         "buy_hold_ret_pct": buy_hold_ret_pct,
         "slippage_bps_list": slippage_bps_list,
         "fee_bps_list": fee_bps_list,
+        "git_commit": git_commit,
         "grid": grid,
     }
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
     # 4. 快照 scan.py 副本（复现性证据：哪个版本的工具跑的）
-    src = Path(__file__).resolve()
-    shutil.copy2(src, out_dir / "scan.py")
+    src_path = Path(__file__).resolve()
+    shutil.copy2(src_path, out_dir / "scan.py")
+
+    # 5. per-cell parquet 落盘（Phase 0.2：前端可画 equity curve + 交易明细）
+    for slip, fee, equity_curve, trades in cell_data:
+        # 文件名规范：slip5_fee4.5（bps 整数/float 1 位小数）
+        cell_label = f"slip{int(slip)}_fee{fee:.1f}".replace(".", "p", 1)
+        cell_dir = out_dir / "cells" / cell_label
+        _persist_cell_parquet(cell_dir, equity_curve, trades)
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -482,7 +585,7 @@ def main():
     print(f"   输出: {out_dir}")
     print()
 
-    slip_axis, fee_axis, grid = grid_scan(
+    slip_axis, fee_axis, grid, cell_data = grid_scan(
         inst_id=args.symbol,
         bar=args.bar,
         strategy_full=strategy_full,
@@ -505,7 +608,7 @@ def main():
     persist(
         out_dir, args.name, args.symbol, args.bar, strategy_full,
         slippage_bps_list, fee_bps_list, args.leverage, args.capital,
-        args.buy_hold_ret, slip_axis, fee_axis, grid, timestamp,
+        args.buy_hold_ret, slip_axis, fee_axis, grid, cell_data, timestamp,
     )
 
     viable_count = sum(1 for r in grid if viability(r["ret_pct"], args.buy_hold_ret))

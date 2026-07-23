@@ -16,8 +16,27 @@ import { useDisclosure } from '@mantine/hooks'
 import { PortfolioPage } from './pages/Portfolio'
 import { CronPage } from './pages/Cron'
 import { QueryPage } from './pages/Query'
+import { BacktestListPage } from './pages/BacktestList'
+import { BacktestDetailPage } from './pages/BacktestDetail'
+import { BacktestComparePage } from './pages/BacktestCompare'
 
-type PageId = 'portfolio' | 'cron' | 'query'
+type RunSummary = {
+  id: string
+  name: string
+  timestamp: string | null
+  git_commit: string | null
+  strategy: string | null
+  symbol: string | null
+  bar: string | null
+  leverage: number | null
+  buy_hold_ret_pct: number | null
+  n_cells: number
+  viable_count: number
+  best_ret_pct: number | null
+  best_sharpe: number | null
+}
+
+type PageId = 'portfolio' | 'cron' | 'query' | 'backtest-list' | 'backtest-detail' | 'backtest-compare'
 
 const NAV_ITEMS: Array<{
   id: PageId
@@ -41,17 +60,50 @@ const NAV_ITEMS: Array<{
     description: '自然语言查询 · Phase 2b',
     badge: 'stub',
   },
+  {
+    id: 'backtest-list',
+    label: 'Backtest',
+    description: 'fragility_scan 输出 · 网格热力图 · equity 叠加',
+    badge: 'new',
+  },
 ]
 
 const PAGE_TITLES: Record<PageId, string> = {
   portfolio: 'Portfolio · OKX Web',
   cron: 'Cron · OKX Web',
   query: 'Query · OKX Web',
+  'backtest-list': 'Backtest · OKX Web',
+  'backtest-detail': 'Backtest Detail · OKX Web',
+  'backtest-compare': 'Compare · OKX Web',
 }
 
 export default function App() {
   const [page, setPage] = useState<PageId>('portfolio')
   const [opened, { toggle }] = useDisclosure()
+
+  // Backtest 跨页共享状态
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [compareRunIds, setCompareRunIds] = useState<string[]>([])
+  const [allRuns, setAllRuns] = useState<RunSummary[]>([])
+
+  // 在 backtest 页时拉取所有 run 列表（compare 页用）
+  useEffect(() => {
+    if (!page.startsWith('backtest')) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const r = await fetch('/api/backtest/runs')
+        if (!r.ok) return
+        const json = await r.json()
+        if (!cancelled) setAllRuns(json.runs ?? [])
+      } catch {
+        // 静默失败 — list 页面也会自己 fetch
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [page])
 
   useEffect(() => {
     document.title = PAGE_TITLES[page] ?? 'OKX Web'
@@ -78,7 +130,7 @@ export default function App() {
             />
             <Title order={4}>OKX Web Dashboard</Title>
             <Badge variant="light" color="blue" size="sm">
-              v1.3.0
+              v1.4.0
             </Badge>
             <Badge variant="light" color="gray" size="sm">
               bind 127.0.0.1:18787
@@ -143,6 +195,37 @@ export default function App() {
         {page === 'portfolio' && <PortfolioPage />}
         {page === 'cron' && <CronPage />}
         {page === 'query' && <QueryPage />}
+        {page === 'backtest-list' && (
+          <BacktestListPage
+            onSelect={(id) => {
+              setSelectedRunId(id)
+              setPage('backtest-detail')
+            }}
+          />
+        )}
+        {page === 'backtest-detail' && selectedRunId && (
+          <BacktestDetailPage
+            runId={selectedRunId}
+            onBack={() => setPage('backtest-list')}
+            onAddToCompare={(id) => {
+              if (!compareRunIds.includes(id)) {
+                setCompareRunIds([...compareRunIds, id])
+              }
+              setPage('backtest-compare')
+            }}
+          />
+        )}
+        {page === 'backtest-compare' && (
+          <BacktestComparePage
+            runIds={compareRunIds}
+            setRunIds={setCompareRunIds}
+            allRuns={allRuns}
+            onSelect={(id) => {
+              setSelectedRunId(id)
+              setPage('backtest-detail')
+            }}
+          />
+        )}
       </AppShell.Main>
     </AppShell>
   )

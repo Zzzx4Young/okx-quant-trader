@@ -36,6 +36,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -44,6 +45,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+import pyarrow.parquet as pq
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -55,6 +57,7 @@ OKX_ROOT = WEB_DIR.parent.parent                  # okx/
 FRONTEND_DIR = WEB_DIR.parent / "frontend"        # okx/web/frontend
 DIST_DIR = FRONTEND_DIR / "dist"                  # okx/web/frontend/dist
 STATE_DIR = OKX_ROOT / "state"
+EXPERIMENTS_DIR = OKX_ROOT / "docs" / "agent-context" / "experiments"  # backtest 输出根
 
 DRIFT_THRESHOLD_SECONDS = 240  # MEMORY.md cron P0 lesson (effb148) → MAX_WAIT_SECONDS
 
@@ -70,7 +73,7 @@ LLM_MAX_TOKENS = int(os.environ.get("OKX_WEB_LLM_MAX_TOKENS", "500"))
 
 logger = logging.getLogger("okx-web")
 
-app = FastAPI(title="OKX Web Dashboard", version="1.3.0")
+app = FastAPI(title="OKX Web Dashboard", version="1.4.0")
 
 _DEFAULT_CORS = [
     "http://127.0.0.1:5173",
@@ -596,7 +599,7 @@ async def health() -> Dict[str, Any]:
     return {
         "status": "ok",
         "service": "okx-web",
-        "version": "1.3.0",
+        "version": "1.4.0",
         "phase": "2c-prod",
         "now": datetime.now().astimezone().isoformat(timespec="seconds"),
         "llm": {
@@ -906,6 +909,216 @@ async def query(req: QueryIn) -> Dict[str, Any]:
 
 
 # ───────── Phase 2c: serve static bundle in prod ─────────
+
+# ═════════════════════════════════════════════════════════════════
+# Phase 1a: Backtest 分析 API（MVP v1.4.0 · 2026-07-23）
+# 数据源: okx/docs/agent-context/experiments/<run_id>/
+#   meta.json + cells/<label>/equity.parquet + cells/<label>/trades.parquet
+# 缓存: mtime-based in-memory (process-local)，fragility_scan 写盘后下次读自动失效
+# ═════════════════════════════════════════════════════════════════
+
+_META_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}     # path_str → (mtime, parsed)
+_PARQUET_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}  # path_str → (mtime, parsed)
+
+
+def _load_meta_cached(path: Path) -> Optional[Dict[str, Any]]:
+    """meta.json 加载 + mtime 缓存。fragility_scan 落盘后下次请求自动失效。"""
+    key = str(path)
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    cached = _META_CACHE.get(key)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    data = _load_json(path)
+    if data is not None:
+        _META_CACHE[key] = (mtime, data)
+    return data
+
+
+def _load_parquet_cached(path: Path) -> Optional[Dict[str, Any]]:
+    """equity.parquet / trades.parquet 加载 + mtime 缓存 → dict-of-arrays。"""
+    key = str(path)
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    cached = _PARQUET_CACHE.get(key)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        table = pq.read_table(path)
+    except Exception as e:
+        logger.warning("parquet read failed for %s: %s", path, e)
+        return None
+    data = {col: table.column(col).to_pylist() for col in table.column_names}
+    _PARQUET_CACHE[key] = (mtime, data)
+    return data
+
+
+def _parse_cell_label(label: str) -> Optional[Tuple[int, float]]:
+    """slip5_fee4p5 → (5, 4.5)。脆弱性扫描 cell 命名规范。"""
+    m = re.fullmatch(r"slip(\d+)_fee(\d+)p(\d+)", label)
+    if not m:
+        return None
+    return int(m.group(1)), float(f"{m.group(2)}.{m.group(3)}")
+
+
+def _viable(ret_pct: Optional[float], buy_hold_ret_pct: Optional[float]) -> Optional[bool]:
+    """与 fragility_scan.viability() 同语义（前端不复制逻辑）。"""
+    if ret_pct is None or buy_hold_ret_pct is None:
+        return None
+    return ret_pct > buy_hold_ret_pct
+
+
+def _experiment_dirs() -> List[Path]:
+    """扫描 EXPERIMENTS_DIR 下所有含 meta.json 的子目录，按 mtime desc 排序。"""
+    if not EXPERIMENTS_DIR.exists():
+        return []
+    out = []
+    for p in EXPERIMENTS_DIR.iterdir():
+        if p.is_dir() and (p / "meta.json").exists():
+            out.append(p)
+    out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return out
+
+
+def _run_summary(run_dir: Path, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """单个 experiment 的列表视图（不含 grid 完整内容，避免响应过大）。"""
+    grid = meta.get("grid") or []
+    viable_count = 0
+    best_ret = None
+    best_sharpe = None
+    buy_hold = meta.get("buy_hold_ret_pct")
+    for cell in grid:
+        ret = cell.get("ret_pct")
+        sh = cell.get("sharpe")
+        if ret is not None:
+            if best_ret is None or ret > best_ret:
+                best_ret = ret
+        if sh is not None:
+            if best_sharpe is None or sh > best_sharpe:
+                best_sharpe = sh
+        if buy_hold is not None and ret is not None and ret > buy_hold:
+            viable_count += 1
+    return {
+        "id": run_dir.name,
+        "name": meta.get("scan_name") or run_dir.name,
+        "timestamp": meta.get("timestamp"),
+        "git_commit": meta.get("git_commit"),
+        "strategy": meta.get("strategy"),
+        "symbol": meta.get("symbol"),
+        "bar": meta.get("bar"),
+        "leverage": meta.get("leverage"),
+        "slippage_bps_list": meta.get("slippage_bps_list") or [],
+        "fee_bps_list": meta.get("fee_bps_list") or [],
+        "buy_hold_ret_pct": buy_hold,
+        "n_cells": len(grid),
+        "viable_count": viable_count,
+        "best_ret_pct": best_ret,
+        "best_sharpe": best_sharpe,
+    }
+
+
+@app.get("/api/backtest/runs")
+async def backtest_runs() -> Dict[str, Any]:
+    """列出所有 backtest experiment（按 mtime desc）。"""
+    dirs = _experiment_dirs()
+    runs = []
+    for d in dirs:
+        meta = _load_meta_cached(d / "meta.json")
+        if meta is None:
+            continue
+        runs.append(_run_summary(d, meta))
+    return {"count": len(runs), "runs": runs}
+
+
+@app.get("/api/backtest/runs/{run_id}")
+async def backtest_run_detail(run_id: str) -> Dict[str, Any]:
+    """单个 experiment 完整 meta.json（含 grid 全量 cell 指标）。"""
+    # 防路径穿越：run_id 仅允许 [A-Za-z0-9._-]
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", run_id):
+        raise HTTPException(status_code=400, detail=f"invalid run_id: {run_id}")
+    run_dir = EXPERIMENTS_DIR / run_id
+    if not run_dir.exists() or not run_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+    meta = _load_meta_cached(run_dir / "meta.json")
+    if meta is None:
+        raise HTTPException(status_code=503, detail=f"meta.json missing/invalid in {run_id}")
+    # 注入 id 便于前端使用
+    meta = {**meta, "id": run_id}
+    return meta
+
+
+@app.get("/api/backtest/runs/{run_id}/cells")
+async def backtest_run_cells(run_id: str) -> Dict[str, Any]:
+    """列出 experiment 下所有 cell 标签 + 每 cell 摘要（用于网格热力图渲染）。"""
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", run_id):
+        raise HTTPException(status_code=400, detail=f"invalid run_id: {run_id}")
+    run_dir = EXPERIMENTS_DIR / run_id
+    if not run_dir.exists() or not run_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+    meta = _load_meta_cached(run_dir / "meta.json")
+    if meta is None:
+        raise HTTPException(status_code=503, detail=f"meta.json missing in {run_id}")
+
+    cells_dir = run_dir / "cells"
+    buy_hold = meta.get("buy_hold_ret_pct")
+    cells = []
+    # 优先用 grid 顺序（与 meta.json 一致），缺失 cell 跳过
+    for cell_meta in meta.get("grid") or []:
+        slip = cell_meta.get("slippage_bps")
+        fee = cell_meta.get("fee_bps")
+        if slip is None or fee is None:
+            continue
+        label = f"slip{int(slip)}_fee{fee:.1f}".replace(".", "p", 1)
+        cells.append({
+            "label": label,
+            "slippage_bps": slip,
+            "fee_bps": fee,
+            "ret_pct": cell_meta.get("ret_pct"),
+            "sharpe": cell_meta.get("sharpe"),
+            "maxDD_pct": cell_meta.get("maxDD_pct"),
+            "trades": cell_meta.get("trades"),
+            "win_rate_pct": cell_meta.get("win_rate_pct"),
+            "slip_cost": cell_meta.get("slip_cost"),
+            "fee_paid": cell_meta.get("fee_paid"),
+            "viable": _viable(cell_meta.get("ret_pct"), buy_hold),
+            "has_equity": (cells_dir / label / "equity.parquet").exists(),
+            "has_trades": (cells_dir / label / "trades.parquet").exists(),
+        })
+    return {"run_id": run_id, "count": len(cells), "cells": cells}
+
+
+@app.get("/api/backtest/runs/{run_id}/cells/{cell_label}/equity")
+async def backtest_cell_equity(run_id: str, cell_label: str) -> Dict[str, Any]:
+    """单个 cell 的权益曲线（equity.parquet → JSON 数组）。"""
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", run_id):
+        raise HTTPException(status_code=400, detail=f"invalid run_id: {run_id}")
+    if not re.fullmatch(r"slip\d+_fee\d+p\d+", cell_label):
+        raise HTTPException(status_code=400, detail=f"invalid cell_label: {cell_label}")
+    eq_path = EXPERIMENTS_DIR / run_id / "cells" / cell_label / "equity.parquet"
+    if not eq_path.exists():
+        raise HTTPException(status_code=404, detail=f"equity.parquet missing: {run_id}/{cell_label}")
+    data = _load_parquet_cached(eq_path)
+    if data is None:
+        raise HTTPException(status_code=503, detail=f"equity.parquet unreadable: {run_id}/{cell_label}")
+    timestamps = data.get("timestamp") or []
+    equities = data.get("equity") or []
+    return {
+        "run_id": run_id,
+        "cell_label": cell_label,
+        "n_points": len(timestamps),
+        "start_ts": timestamps[0] if timestamps else None,
+        "end_ts": timestamps[-1] if timestamps else None,
+        "timestamp": timestamps,
+        "equity": equities,
+    }
+
+
+
+# ───────── Phase 2c: serve static bundle in prod ─────────
 # Mount AFTER all routes so /api/* takes precedence over StaticFiles catch-all.
 
 if DIST_DIR.exists() and DIST_DIR.is_dir():
@@ -926,3 +1139,15 @@ if __name__ == "__main__":
         port=int(os.environ.get("OKX_WEB_PORT", "18787")),
         reload=False,   # prod: no reload (systemd manages restarts)
     )
+
+
+
+
+
+# Mount AFTER all routes so /api/* takes precedence over StaticFiles catch-all.
+
+if DIST_DIR.exists() and DIST_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=str(DIST_DIR), html=True), name="static")
+
+
+
