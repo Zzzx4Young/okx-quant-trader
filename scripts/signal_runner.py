@@ -256,6 +256,59 @@ def run_at_next_bar(
         logger.warning("⚠️ 跳过 Spin-lock（fallback 模式）")
 
     # 5. 调用 Runner.run()
+    # ─── Phase 3A P0：regime filter 守门（BTC UP/DOWN/SIDE 判定）───
+    # 在 Runner 启动前过一道 regime 闸，避免在不可入场 regime 下空转。
+    # 设计原则（详见 cross-strategy-a-vs-c.md）：
+    #   - UP+EMA多头 (ret>10%, EMA50>EMA200*1.02): ALL 拒入场
+    #   - SIDE (其他): 待人工评估，默认拒
+    #   - DOWN+EMA空头 (ret<-5%, EMA50<EMA200): 首选 A
+    # 若 regime_filter 校验失败（例说接口异常），fallback 到 Runner 自身的 filter。
+    try:
+        from okx.code.regime_filter import recommended_strategy
+        from okx.code.backtest.data_loader import load as load_klines
+
+        btc_data = load_klines("BTC-USDT-SWAP", "1h")
+        regime_strategy, regime_reason, regime_feats = recommended_strategy(btc_data.klines)
+        result["regime_decision"] = {
+            "strategy": regime_strategy,
+            "reason": regime_reason,
+            "features": {
+                "ret_90d_pct": regime_feats.get("ret_90d_pct"),
+                "ema50": regime_feats.get("ema50"),
+                "ema200": regime_feats.get("ema200"),
+                "ema_ratio": regime_feats.get("ema_ratio"),
+                "bars": regime_feats.get("bars"),
+            },
+        }
+        if regime_strategy is None:
+            ret = regime_feats.get("ret_90d_pct")
+            ratio = regime_feats.get("ema_ratio")
+            ret_str = f"{ret:+.1f}%" if ret is not None else "N/A"
+            ratio_str = f"{ratio:.3f}" if ratio is not None else "N/A"
+            logger.info(
+                f"🚦 regime_filter 拒入场: {regime_reason} | "
+                f"ret={ret_str}, EMA ratio={ratio_str}"
+            )
+            # 跳过 Runner.run()，直接写 heartbeat（让 watchdog 看到 "regime_skipped"）
+            result["runner_result"] = {
+                "signal_triggered": False,
+                "regime_skipped": True,
+                "errors": [],
+            }
+            try:
+                _write_heartbeat(result)
+            except Exception:
+                pass
+            result["finished_at"] = datetime.now(timezone.utc).isoformat()
+            return result
+        logger.info(
+            f"🚦 regime_filter 通过: 推荐 = {regime_strategy} | {regime_reason}"
+        )
+    except Exception as e:
+        logger.exception(f"regime_filter 检查失败 (fallback 到 Runner 自身 filter): {e}")
+        result["errors"].append(f"regime_filter_failed: {e}")
+        # 不阻塞：fallback 到 Runner.run()
+
     try:
         from okx.code.runner import Runner
 
