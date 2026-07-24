@@ -53,17 +53,36 @@ RISK_THRESHOLDS: Dict[str, RiskThreshold] = {
         description="总未实现盈亏占净值比例",
     ),
     # 单标的敞口占比（结构性失衡，非即时爆仓风险）
+    # ⚠️ DEPRECATED (2026-07-24 alert refactor): 被 auto_inst_concentration + manual_exposure_ratio 替代
+    # 保留字段以兼容下游消费者，但不再参与 _check 告警
     "inst_concentration": RiskThreshold(
         warn=0.50, crit=0.70, direction="high",
         description="单标的（BTC/ETH等）敞口占总名义比例",
         structural=True,
     ),
     # 单策略敞口占比（结构性失衡）
+    # ⚠️ DEPRECATED (2026-07-24 alert refactor): 被 auto_strategy_concentration + manual_exposure_ratio 替代
     "strategy_concentration": RiskThreshold(
         warn=0.60, crit=0.80, direction="high",
         description="单策略（A/B/C/D）敞口占总名义比例",
         structural=True,
     ),
+    # Auto 仓位内部单策略集中度（结构性，告警）
+    # 语义：仅看 A/B/C/D 内部最大单策略占比，不再混入 manual 仓位
+    "auto_strategy_concentration": RiskThreshold(
+        warn=0.60, crit=0.80, direction="high",
+        description="Auto 仓位内部最大单策略集中度（仅 A/B/C/D）",
+        structural=True,
+    ),
+    # Auto 仓位内部单标的集中度（结构性，告警）
+    # 语义：仅看 auto 内部最大单标的占比
+    "auto_inst_concentration": RiskThreshold(
+        warn=0.50, crit=0.70, direction="high",
+        description="Auto 仓位内部最大单标的集中度（仅 auto）",
+        structural=True,
+    ),
+    # manual_exposure_ratio: 不进 RISK_THRESHOLDS——是展示项不是告警
+    # 三色仪表盘显示（<50% 绿 / 50-80% 黄 / >80% 红），不阻断 auto 系统独立运行
     # 最小强平距离（占 markPx 比例）
     "liq_proximity_pct": RiskThreshold(
         warn=0.10, crit=0.05, direction="low",
@@ -158,11 +177,20 @@ class RiskMetrics:
     total_upl_usd: float = 0.0            # 总 uPnL（USDT）
     upl_pct: float = 0.0                  # 总 uPnL / equity
 
-    # ── 集中度 ──
-    inst_concentration: float = 0.0       # 最大单标的占比
+    # ── 集中度（DEPRECATED 混合语义，仅保留兼容下游展示）──
+    inst_concentration: float = 0.0       # 最大单标的占比（混合 manual + auto）
     inst_concentration_target: str = ""   # 哪个标的（e.g. BTC-USDT-SWAP）
-    strategy_concentration: float = 0.0   # 最大单策略占比
+    strategy_concentration: float = 0.0   # 最大单策略占比（混合 manual + auto）
     strategy_concentration_target: str = ""
+
+    # ── 集中度（Source-filtered 新语义，2026-07-24 alert refactor）──
+    auto_inst_concentration: float = 0.0              # Auto 仓位内部最大单标的占比（0.0 = 无 auto 仓位）
+    auto_inst_concentration_target: str = ""          # 哪个标的
+    auto_strategy_concentration: float = 0.0          # Auto 仓位内部最大单策略占比
+    auto_strategy_concentration_target: str = ""      # 哪个策略
+    auto_position_count: int = 0                      # Auto 仓位数量
+    manual_exposure_ratio: float = 0.0                # Manual 占总名义比例（0.0-1.0）
+    manual_position_count: int = 0                    # Manual 仓位数量
 
     # ── 强平 ──
     min_liq_distance_pct: float = 1.0     # 最小强平距离（占 markPx），1.0 = 无持仓

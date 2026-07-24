@@ -76,6 +76,23 @@ def _normalize_inst_id(s: str) -> str:
     return s.upper().replace("-", "").replace("_", "").strip()
 
 
+# ──────────── Position classification（2026-07-24 alert refactor）────────────
+# 集中度告警需要区分 Manual vs Auto，所以加了 strategy-name 判定。
+# Manual 仓位：人工/网页开仓，strategies 是 "EXTERNAL_WEB_SYNC"（OKX 原标签）
+#              或 "MANUAL_NO_AUTO_CLOSE"（v1.8.3+ sync_portfolio 重命名）
+# Auto 仓位：signal_runner 触发，strategies 是 "A" / "B_..." / "C_..." / "D_..."
+MANUAL_STRATEGY_PREFIXES: Tuple[str, ...] = ("EXTERNAL", "MANUAL_")
+
+
+def is_manual_position(p: PositionRisk) -> bool:
+    """判定仓位是否来自 Manual（人工/网页）开仓。
+
+    语义：集中度告警要 Source-filtered，Auto 仓位内部集中度跟 Manual 仓位无关。
+    """
+    s = p.strategy or ""
+    return any(s.startswith(prefix) for prefix in MANUAL_STRATEGY_PREFIXES)
+
+
 def _match_strategy(
     portfolio_path: Optional[Path],
     inst_id: str,
@@ -269,6 +286,33 @@ def compute_metrics(
         m.strategy_concentration = top_strat[1] / total_notional
         m.strategy_concentration_target = top_strat[0]
 
+    # ── Source-filtered 集中度（2026-07-24 alert refactor）──
+    # Auto 仓位（signal_runner 触发）：只算 auto 内部集中度
+    # Manual 仓位（人工开仓）：单独算 exposure ratio，不参与告警阈值
+    auto_positions = [p for p in positions if not is_manual_position(p)]
+    manual_positions = [p for p in positions if is_manual_position(p)]
+    m.auto_position_count = len(auto_positions)
+    m.manual_position_count = len(manual_positions)
+
+    if auto_positions:
+        auto_inst_totals: Dict[str, float] = {}
+        auto_strat_totals: Dict[str, float] = {}
+        for p in auto_positions:
+            auto_inst_totals[p.inst_id] = auto_inst_totals.get(p.inst_id, 0.0) + p.notional_usd
+            auto_strat_totals[p.strategy] = auto_strat_totals.get(p.strategy, 0.0) + p.notional_usd
+        auto_total = sum(auto_inst_totals.values()) or 1.0
+        top_auto_inst = max(auto_inst_totals.items(), key=lambda x: x[1])
+        m.auto_inst_concentration = top_auto_inst[1] / auto_total
+        m.auto_inst_concentration_target = top_auto_inst[0]
+        top_auto_strat = max(auto_strat_totals.items(), key=lambda x: x[1])
+        m.auto_strategy_concentration = top_auto_strat[1] / auto_total
+        m.auto_strategy_concentration_target = top_auto_strat[0]
+
+    # Manual 暴露 = manual 名义 / 总名义
+    manual_total = sum(p.notional_usd for p in manual_positions)
+    if total_notional > 0:
+        m.manual_exposure_ratio = manual_total / total_notional
+
     # ── 最小强平距离 ──
     liq_dists = [(p.liq_distance_pct, p.inst_id) for p in positions if p.liq_distance_pct is not None]
     if liq_dists:
@@ -336,8 +380,14 @@ def check_thresholds(
     _check("gross_leverage", metrics.gross_leverage, "{:.2f}x")
     _check("net_leverage", metrics.net_leverage, "{:.2f}x")
     _check("upl_pct", metrics.upl_pct, "{:.2%}")
-    _check("inst_concentration", metrics.inst_concentration, "{:.1%}")
-    _check("strategy_concentration", metrics.strategy_concentration, "{:.1%}")
+    # ── 集中度告警（2026-07-24 alert refactor）──
+    # ⚠️ DEPRECATED: inst_concentration / strategy_concentration 不再 _check
+    #   它们的语义混了 manual + auto，结构性误报（"100% EXTERNAL_WEB_SYNC" 是
+    #   描述当前状态，不是 risk signal）。保留字段仅做展示。
+    # NEW: 只对 auto-filtered 集中度告警。manual 仓位不参与告警。
+    _check("auto_inst_concentration", metrics.auto_inst_concentration, "{:.1%}")
+    _check("auto_strategy_concentration", metrics.auto_strategy_concentration, "{:.1%}")
+    # manual_exposure_ratio: 展示项不是告警，dashboard 三色显示
     _check("liq_proximity_pct", metrics.min_liq_distance_pct, "{:.2%}")
     _check("sl_consumed_pct", metrics.max_sl_consumed_pct, "{:.1%}")
     _check("min_equity_buffer", metrics.equity_buffer_pct, "{:.1%}")
@@ -414,8 +464,28 @@ def format_report(
         lines.append(f"📈 总 uPnL:    {upl_str} ({upl_pct_str})")
         lines.append("")
         if metrics.position_breakdown:
-            lines.append(f"🎯 最大单标占比: {_fmt_pct(metrics.inst_concentration)} ({metrics.inst_concentration_target or '-'})")
-            lines.append(f"🧠 最大单策略:   {_fmt_pct(metrics.strategy_concentration)} ({metrics.strategy_concentration_target or '-'})")
+            # 集中度显示（2026-07-24 alert refactor）：
+            # 新语义（Source-filtered）优先显示；旧字段（混合）保留为参考
+            if metrics.auto_position_count > 0:
+                lines.append(
+                    f"🧠 Auto 集中度: strategy={_fmt_pct(metrics.auto_strategy_concentration)} "
+                    f"({metrics.auto_strategy_concentration_target or '-'}), "
+                    f"inst={_fmt_pct(metrics.auto_inst_concentration)} "
+                    f"({metrics.auto_inst_concentration_target or '-'}) "
+                    f"[n={metrics.auto_position_count}]"
+                )
+            else:
+                lines.append("🧠 Auto 集中度: — (无 auto 仓位)")
+            if metrics.manual_position_count > 0:
+                lines.append(
+                    f"🖐️  Manual 暴露: {_fmt_pct(metrics.manual_exposure_ratio)} "
+                    f"[n={metrics.manual_position_count}] "
+                    f"{'(>80% ⚠️)' if metrics.manual_exposure_ratio > 0.8 else ''}"
+                )
+            else:
+                lines.append("🖐️  Manual 暴露: — (无 manual 仓位)")
+            # 旧字段（保留以兼容解析）
+            lines.append(f"   ↳ 旧字段参考: inst={_fmt_pct(metrics.inst_concentration)} ({metrics.inst_concentration_target or '-'}), strategy={_fmt_pct(metrics.strategy_concentration)} ({metrics.strategy_concentration_target or '-'})")
         if metrics.min_liq_target:
             lines.append(f"🛑 最小强平距离: {_fmt_pct(metrics.min_liq_distance_pct)} ({metrics.min_liq_target})")
         if metrics.max_sl_target:
