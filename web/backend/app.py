@@ -58,6 +58,7 @@ FRONTEND_DIR = WEB_DIR.parent / "frontend"        # okx/web/frontend
 DIST_DIR = FRONTEND_DIR / "dist"                  # okx/web/frontend/dist
 STATE_DIR = OKX_ROOT / "state"
 EXPERIMENTS_DIR = OKX_ROOT / "docs" / "agent-context" / "experiments"  # backtest 输出根
+WALKFORWARD_DIR = OKX_ROOT / "docs" / "agent-context" / "walkforward"  # walkforward 输出根（Phase 3A）
 
 DRIFT_THRESHOLD_SECONDS = 240  # MEMORY.md cron P0 lesson (effb148) → MAX_WAIT_SECONDS
 
@@ -1248,6 +1249,89 @@ async def backtest_cell_kline_with_signals(
         "end_ts": int(kline_df["timestamp"].iloc[-1]),
         "candles": candles,
         "markers": markers,
+    }
+
+
+
+# ───────── Phase 3A: walkforward endpoints ─────────
+
+def _walkforward_dirs() -> List[Path]:
+    """扫描 WALKFORWARD_DIR 下所有含 meta.json 的子目录，按 mtime desc 排序。"""
+    if not WALKFORWARD_DIR.exists():
+        return []
+    out = []
+    for p in WALKFORWARD_DIR.iterdir():
+        if p.is_dir() and (p / "meta.json").exists():
+            out.append(p)
+    out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return out
+
+
+def _walkforward_summary(run_dir: Path, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """walkforward 列表视图：聚合跨窗口指标。"""
+    windows = meta.get("windows") or []
+    n_windows = len(windows)
+    viable_windows = sum(1 for w in windows if (w.get("viable_count") or 0) > 0)
+    best_ret = None
+    worst_ret = None
+    if windows:
+        rets = [w.get("best_ret_pct") for w in windows if w.get("best_ret_pct") is not None]
+        if rets:
+            best_ret = max(rets)
+            worst_ret = min(rets)
+    return {
+        "id": run_dir.name,
+        "scan_name": meta.get("scan_name"),
+        "timestamp": meta.get("timestamp"),
+        "strategy": meta.get("strategy"),
+        "symbol": meta.get("symbol"),
+        "bar": meta.get("bar"),
+        "leverage": meta.get("leverage"),
+        "window_days": meta.get("window_days"),
+        "stride_days": meta.get("stride_days"),
+        "n_windows": n_windows,
+        "viable_window_pct": round(viable_windows / n_windows * 100, 1) if n_windows else 0.0,
+        "best_ret_pct": best_ret,
+        "worst_ret_pct": worst_ret,
+        "git_commit": meta.get("git_commit"),
+    }
+
+
+@app.get("/api/walkforward/runs")
+async def walkforward_runs() -> Dict[str, Any]:
+    """列出所有 walkforward runs（按 mtime desc）。"""
+    dirs = _walkforward_dirs()
+    runs = []
+    for d in dirs:
+        meta = _load_meta_cached(d / "meta.json")
+        if meta is None:
+            continue
+        runs.append(_walkforward_summary(d, meta))
+    return {"count": len(runs), "runs": runs}
+
+
+@app.get("/api/walkforward/runs/{run_id}")
+async def walkforward_run_detail(run_id: str) -> Dict[str, Any]:
+    """单个 walkforward run 完整 meta.json（含 windows[] 数组）+ result.md 内容。"""
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", run_id):
+        raise HTTPException(status_code=400, detail=f"invalid run_id: {run_id}")
+    run_dir = WALKFORWARD_DIR / run_id
+    if not run_dir.exists() or not run_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+    meta = _load_meta_cached(run_dir / "meta.json")
+    if meta is None:
+        raise HTTPException(status_code=503, detail=f"meta.json missing/invalid in {run_id}")
+    result_md_path = run_dir / "result.md"
+    result_md = None
+    if result_md_path.exists():
+        try:
+            result_md = result_md_path.read_text(encoding="utf-8")
+        except OSError:
+            result_md = None
+    return {
+        **meta,
+        "id": run_id,
+        "result_md": result_md,
     }
 
 

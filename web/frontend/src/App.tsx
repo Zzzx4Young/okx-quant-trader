@@ -19,6 +19,8 @@ import { QueryPage } from './pages/Query'
 import { BacktestListPage } from './pages/BacktestList'
 import { BacktestDetailPage } from './pages/BacktestDetail'
 import { BacktestComparePage } from './pages/BacktestCompare'
+import { WalkforwardListPage } from './pages/WalkforwardList'
+import { WalkforwardDetailPage } from './pages/WalkforwardDetail'
 
 type RunSummary = {
   id: string
@@ -38,7 +40,7 @@ type RunSummary = {
   best_sharpe: number | null
 }
 
-type PageId = 'portfolio' | 'cron' | 'query' | 'backtest-list' | 'backtest-detail' | 'backtest-compare'
+type PageId = 'portfolio' | 'cron' | 'query' | 'backtest-list' | 'backtest-detail' | 'backtest-compare' | 'walkforward-list' | 'walkforward-detail'
 
 const NAV_ITEMS: Array<{
   id: PageId
@@ -68,6 +70,12 @@ const NAV_ITEMS: Array<{
     description: 'fragility_scan 输出 · 网格热力图 · equity 叠加',
     badge: 'new',
   },
+  {
+    id: 'walkforward-list',
+    label: 'Walkforward',
+    description: '滚动窗口跨 regime 稳健性 · 18 窗口 BTC 1h',
+    badge: 'Phase 3A',
+  },
 ]
 
 const PAGE_TITLES: Record<PageId, string> = {
@@ -77,6 +85,8 @@ const PAGE_TITLES: Record<PageId, string> = {
   'backtest-list': 'Backtest · OKX Web',
   'backtest-detail': 'Backtest Detail · OKX Web',
   'backtest-compare': 'Compare · OKX Web',
+  'walkforward-list': 'Walkforward · OKX Web',
+  'walkforward-detail': 'Walkforward Detail · OKX Web',
 }
 
 export default function App() {
@@ -87,6 +97,9 @@ export default function App() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [compareRunIds, setCompareRunIds] = useState<string[]>([])
   const [allRuns, setAllRuns] = useState<RunSummary[]>([])
+
+  // Walkforward 跨页共享状态
+  const [selectedWfRunId, setSelectedWfRunId] = useState<string | null>(null)
 
   // 在 backtest 页时拉取所有 run 列表（compare 页用）
   useEffect(() => {
@@ -226,6 +239,20 @@ export default function App() {
               setSelectedRunId(id)
               setPage('backtest-detail')
             }}
+          />
+        )}
+        {page === 'walkforward-list' && (
+          <WalkforwardListPage
+            onSelect={(id) => {
+              setSelectedWfRunId(id)
+              setPage('walkforward-detail')
+            }}
+          />
+        )}
+        {page === 'walkforward-detail' && selectedWfRunId && (
+          <WalkforwardDetailPage
+            runId={selectedWfRunId}
+            onBack={() => setPage('walkforward-list')}
           />
         )}
       </AppShell.Main>

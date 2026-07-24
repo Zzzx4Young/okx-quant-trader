@@ -53,6 +53,7 @@ _PROJECT_ROOT = _HERE.parents[2]  # okx/scripts/fragility_scan.py → 项目根
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from okx.code.backtest.data_loader import load
+from okx.code.backtest.utils import ms_to_datetime
 from okx.code.backtest.matcher import BacktestEngine
 from okx.code.backtest.run_phase2_experiment import STRATEGIES
 
@@ -112,13 +113,18 @@ def run_one(
     fee_bps: float,
     leverage: int,
     initial_capital: float,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
 ) -> Tuple[Dict, List[Tuple[int, float]], List]:
     """跑一次回测，返回 (summary, equity_curve, trades)。
 
     equity_curve: List[(timestamp_ms, equity_value)] —— 时间序列用于画权益曲线
     trades: List[Trade] —— 完整交易列表（含 fills），用于交易明细
+
+    start_ts / end_ts: 时间窗口切片（毫秒），None = 全量。
+    walkforward 用这两个参数切窗口；单次扫描默认 None 保持向后兼容。
     """
-    data = load(inst_id, bar)
+    data = load(inst_id, bar, start_ts=start_ts, end_ts=end_ts)
     sig = STRATEGIES[strategy_full]
     fee_rate = fee_bps / 10000.0
     engine = BacktestEngine(
@@ -162,6 +168,8 @@ def grid_scan(
     fee_bps_list: List[float],
     leverage: int,
     initial_capital: float,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
 ) -> Tuple[List[Dict], List[Dict], List[Dict], List[Tuple[int, float, List, List]]]:
     """
     跑 slippage × fee 完整网格。
@@ -169,12 +177,18 @@ def grid_scan(
 
     per-cell 原始数据: List[(slip_bps, fee_bps, equity_curve, trades)]
     用于后续 parquet 落盘，让前端能画权益曲线 + 交易明细。
+
+    start_ts / end_ts: 时间窗口切片（毫秒），None = 全量。
+    walkforward 调 grid_scan N 次，每次不同窗口。
     """
     grid: List[Dict] = []
     cell_data: List[Tuple[int, float, List, List]] = []
     for slip in slippage_bps_list:
         for fee in fee_bps_list:
-            summary, equity, trades = run_one(inst_id, bar, strategy_full, slip, fee, leverage, initial_capital)
+            summary, equity, trades = run_one(
+                inst_id, bar, strategy_full, slip, fee, leverage, initial_capital,
+                start_ts=start_ts, end_ts=end_ts,
+            )
             grid.append(summary)
             cell_data.append((slip, fee, equity, trades))
 
@@ -235,6 +249,8 @@ def render_markdown(
     fee_axis: List[Dict],
     grid: List[Dict],
     timestamp: str,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
 ) -> str:
     lines: List[str] = []
     lines.append(f"# Fragility Scan: {scan_name}")
@@ -242,6 +258,12 @@ def render_markdown(
     lines.append(f"- **时间**: {timestamp}")
     lines.append(f"- **策略**: `{strategy_full}`")
     lines.append(f"- **标的**: `{inst_id}` ({bar})")
+    if start_ts is not None or end_ts is not None:
+        # walkforward 场景下需要明示窗口；否则 UI 看不到
+        window_ms = (start_ts, end_ts)
+        start_str = ms_to_datetime(window_ms[0]).isoformat() if window_ms[0] is not None else "parquet 最早"
+        end_str = ms_to_datetime(window_ms[1]).isoformat() if window_ms[1] is not None else "parquet 最晚"
+        lines.append(f"- **窗口**: {start_str} → {end_str} (ms: {window_ms[0]} → {window_ms[1]})")
     lines.append(f"- **杠杆**: {leverage}x")
     lines.append(f"- **Buy-and-hold 参考**: {buy_hold_ret_pct if buy_hold_ret_pct is not None else 'N/A'}%")
     lines.append("")
@@ -455,6 +477,8 @@ def persist(
     grid: List[Dict],
     cell_data: List[Tuple[int, float, List, List]],
     timestamp: str,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -466,6 +490,7 @@ def persist(
         scan_name, inst_id, bar, strategy_full,
         slippage_bps_list, fee_bps_list, leverage, buy_hold_ret_pct,
         slip_axis, fee_axis, grid, timestamp,
+        start_ts=start_ts, end_ts=end_ts,
     )
     (out_dir / "result.md").write_text(md, encoding="utf-8")
 
@@ -492,6 +517,10 @@ def persist(
         "git_commit": git_commit,
         "grid": grid,
     }
+    # 窗口元数据：walkforward 需要读回辨别每个 cell 属于哪个窗口
+    if start_ts is not None or end_ts is not None:
+        meta["start_ts"] = start_ts
+        meta["end_ts"] = end_ts
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
     # 4. 快照 scan.py 副本（复现性证据：哪个版本的工具跑的）
@@ -532,6 +561,10 @@ def main():
                         help="扫描名（用作输出目录前缀）")
     parser.add_argument("--out-root", default=None,
                         help="输出根目录（默认 = 仓库根的 docs/agent-context/experiments，与 cwd 无关）")
+    parser.add_argument("--start-ts", type=int, default=None,
+                        help="K 线窗口起始时间戳（毫秒）。None = parquet 最早。主要给 walkforward 用。")
+    parser.add_argument("--end-ts", type=int, default=None,
+                        help="K 线窗口结束时间戳（毫秒）。None = parquet 最晚。主要给 walkforward 用。")
     args = parser.parse_args()
 
     # 默认 out-root: 解析脚本所在位置（fragility_scan.py 在 okx/scripts/，故父级 = okx/）
@@ -575,9 +608,15 @@ def main():
     date_stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = Path(args.out_root) / f"{args.name}-{date_stamp}"
 
+    window_str = (
+        f"[{args.start_ts} → {args.end_ts}]"
+        if args.start_ts is not None or args.end_ts is not None
+        else "全量"
+    )
     print(f"🚀 Fragility Scan 启动")
     print(f"   策略: {strategy_full}")
     print(f"   标的: {args.symbol} ({args.bar})")
+    print(f"   时间窗口: {window_str}")
     print(f"   Slippage: {slippage_bps_list} bps")
     print(f"   Fee:      {fee_bps_list} bps")
     print(f"   杠杆: {args.leverage}x | 资金: ${args.capital:,.0f}")
@@ -593,6 +632,8 @@ def main():
         fee_bps_list=fee_bps_list,
         leverage=args.leverage,
         initial_capital=args.capital,
+        start_ts=args.start_ts,
+        end_ts=args.end_ts,
     )
 
     # 控制台输出
@@ -609,6 +650,7 @@ def main():
         out_dir, args.name, args.symbol, args.bar, strategy_full,
         slippage_bps_list, fee_bps_list, args.leverage, args.capital,
         args.buy_hold_ret, slip_axis, fee_axis, grid, cell_data, timestamp,
+        start_ts=args.start_ts, end_ts=args.end_ts,
     )
 
     viable_count = sum(1 for r in grid if viability(r["ret_pct"], args.buy_hold_ret))
