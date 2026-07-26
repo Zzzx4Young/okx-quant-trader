@@ -402,47 +402,54 @@ class TestCheckThresholds:
         assert any(i.check == "liq_proximity_pct" and i.level == "critical" for i in issues)
 
     def test_inst_concentration_structural(self):
-        """inst_concentration 属结构性失衡，应返回 level="structural"（不被 watchdog 发 Telegram）
+        """inst_concentration DEPRECATED (2026-07-24 alert refactor commit ee915c5)：
 
-        设计：集中度是 portfolio 结构特征，不是当下爆仓风险。
-        watchdog 会抑制 Telegram，仅写日志。v1.8.3+ (2026-07-19)。
+        语义被 auto_inst_concentration + manual_exposure_ratio 替代。
+        保留字段仅做展示，不再 _check 告警（语义混入 manual/auto 导致结构性误报）。
         """
         m = RiskMetrics(
             equity_usd=77000.0,
-            inst_concentration=0.75,  # crit=0.70
+            inst_concentration=0.75,  # crit=0.70 (但不再触发)
             inst_concentration_target="BTC-USDT-SWAP",
             position_count=1,
         )
         issues = check_thresholds(m)
-        assert any(i.check == "inst_concentration" and i.level == "structural" for i in issues)
-        # 不再是 critical (防告警噪声)
-        assert not any(i.check == "inst_concentration" and i.level == "critical" for i in issues)
+        # DEPRECATED 后不应产生告警（取代者：auto_inst_concentration）
+        assert not any(i.check == "inst_concentration" for i in issues), (
+            "DEPRECATED: inst_concentration 不应触发告警（commit ee915c5，参见风险阈值文档）"
+        )
 
     def test_strategy_concentration_structural(self):
-        """strategy_concentration 同样属于 structural"""
+        """strategy_concentration DEPRECATED (2026-07-24 alert refactor commit ee915c5)"""
         m = RiskMetrics(
             equity_usd=77000.0,
-            strategy_concentration=0.85,  # crit=0.80
+            strategy_concentration=0.85,  # crit=0.80 (但不再触发)
             strategy_concentration_target="A",
             position_count=1,
         )
         issues = check_thresholds(m)
-        assert any(i.check == "strategy_concentration" and i.level == "structural" for i in issues)
-        assert not any(i.check == "strategy_concentration" and i.level == "critical" for i in issues)
+        # DEPRECATED 后不应产生告警（取代者：auto_strategy_concentration）
+        assert not any(i.check == "strategy_concentration" for i in issues), (
+            "DEPRECATED: strategy_concentration 不应触发告警（commit ee915c5）"
+        )
 
     def test_structural_override_does_not_affect_real_critical(self):
-        """structural 标记只 override 集中度；真 critical 仍然发 critical（如 leverage 爆仓）"""
+        """DEPRECATED 后的语义：inst_concentration 仍保留为计算属性，但不再 _check。
+        true 风险 (如 leverage) 仍然发 critical 告警。
+        """
         m = RiskMetrics(
             equity_usd=77000.0,
-            gross_leverage=5.5,  # crit
-            inst_concentration=0.75,  # structural
+            gross_leverage=5.5,  # crit (真风险)
+            inst_concentration=0.75,  # DEPRECATED 不告警
             position_count=1,
         )
         issues = check_thresholds(m)
         # gross_leverage 应仍是 critical (真风险)
         assert any(i.check == "gross_leverage" and i.level == "critical" for i in issues)
-        # inst_concentration 是 structural
-        assert any(i.check == "inst_concentration" and i.level == "structural" for i in issues)
+        # inst_concentration 不告警 (DEPRECATED)
+        assert not any(i.check == "inst_concentration" for i in issues), (
+            "DEPRECATED 后 inst_concentration 不告警（commit ee915c5）"
+        )
 
     def test_sl_consumed_warning(self):
         m = RiskMetrics(
