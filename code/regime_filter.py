@@ -194,10 +194,86 @@ __all__ = [
     "resample_to_daily",
     "_compute_features",
     "recommended_strategy",
+    "tag_trades_by_regime",
     "DEFAULT_UP_RET_THRESHOLD",
     "DEFAULT_DOWN_RET_THRESHOLD",
     "DEFAULT_EMA_BULLISH_RATIO",
 ]
+
+
+def tag_trades_by_regime(
+    trades: pd.DataFrame,
+    *,
+    bar: str = "1h",
+    end_ts_column: str = "exit_ts",
+    window_id_column: str = "window_id",
+    symbol: str = "BTC-USDT-SWAP",
+) -> pd.DataFrame:
+    """为 trades 添加 '_regime' 列：'A' | 'UP' | 'SIDE' | 'UNKNOWN'
+
+    状态语义：
+      - 'A'   DOWN+EMA空头 ：regime_filter 推荐 A 策略（live 会入场）
+      - 'UP'  强 UP+EMA多头：拒入场（live 不交易）
+      - 'SIDE' 其他           ：regime_filter 默认拒入场
+      - 'UNKNOWN' 数据不足  ：无法判定
+
+    实现要点：
+      - 按 unique window_id 调一次 recommended_strategy（不是每笔调）
+      - window 的 regime_snapshot_ts = 该 window 末笔 exit_ts（模拟"当时判断"）
+      - 同一 window 的所有 trades 共用 regime label
+      - 依赖 okx.code.backtest.data_loader.load(symbol, bar, end_ts=...)
+
+    :return: 拷贝原 DataFrame + '_regime' 列（同行复制，length 不变）
+    """
+    if window_id_column not in trades.columns:
+        raise KeyError(f"trades 缺少 window_id 列（'{window_id_column}'）；需在 load_trades 时保留")
+
+    df = trades.copy()
+
+    # 1. 收集 (window_id, end_ts)
+    win_end_ts = (
+        df.groupby(window_id_column)[end_ts_column]
+        .max()
+        .reset_index()
+        .rename(columns={end_ts_column: "_regime_snapshot_ts"})
+    )
+    win_end_ts["_regime"] = "UNKNOWN"  # 默认
+
+    # 2. 对每个 unique window 调一次 recommended_strategy
+    from okx.code.backtest.data_loader import load as load_klines
+
+    for i, row in win_end_ts.iterrows():
+        win_id = row[window_id_column]
+        end_ts_ms = int(row["_regime_snapshot_ts"])
+        try:
+            btc = load_klines(symbol, bar, end_ts=end_ts_ms)
+            strat, _reason, _feats = recommended_strategy(btc.klines)
+            if strat == "A":
+                win_end_ts.at[i, "_regime"] = "A"
+            elif strat is None:
+                ret_90d = _feats.get("ret_90d_pct")
+                ema_ratio = _feats.get("ema_ratio")
+                if (
+                    ret_90d is not None and ema_ratio is not None
+                    and ret_90d > DEFAULT_UP_RET_THRESHOLD
+                    and ema_ratio > DEFAULT_EMA_BULLISH_RATIO
+                ):
+                    win_end_ts.at[i, "_regime"] = "UP"
+                else:
+                    win_end_ts.at[i, "_regime"] = "SIDE"
+            else:
+                win_end_ts.at[i, "_regime"] = "UNKNOWN"
+        except Exception:
+            win_end_ts.at[i, "_regime"] = "UNKNOWN"
+
+    # 3. 合并 _regime 回原 df
+    df = df.merge(
+        win_end_ts[[window_id_column, "_regime"]],
+        on=window_id_column,
+        how="left",
+    )
+    df["_regime"] = df["_regime"].fillna("UNKNOWN")
+    return df
 
 
 if __name__ == "__main__":
