@@ -130,6 +130,14 @@ class Runner:
             results["risk_check"] = risk_check
             return results
 
+        # ── 1.5. 事中防御 gate（2026-07-25 P0 起 → 2026-07-26 委托至 code/gates）──
+        # 共享逻辑在 code/gates.py::run_pre_signal_gates（与 signal_runner.py 同一来源，
+        # 消除 7-24/7-25 期间 4 处 schema 漂移）。本方法保留为薄 wrapper 维持既有 callers。
+        gate_check = self._pre_signal_gates()
+        results["signal_gates"] = gate_check
+        if not gate_check["passed"]:
+            return results
+
         # ── 2. 获取当前持仓 ──
         positions = self._portfolio.get_all_positions()
         results["positions"] = self._portfolio.get_positions_summary()
@@ -282,6 +290,19 @@ class Runner:
                         )
 
         return {"passed": True}
+
+    def _pre_signal_gates(self) -> Dict[str, Any]:
+        """事中防御 gate（薄 wrapper → 委托 code.gates.run_pre_signal_gates）。
+
+        真正的实现与 signal_runner.py 共享一份（2026-07-26 抽离），避免先前
+        4 处 schema / 日志 / 退出路径漂移。本方法保留仅为：
+          (a) 不破坏现有 caller (Runner.run() 直接调此方法)
+          (b) 保持 Runner 类的内聚外观（外部仍可 `runner._pre_signal_gates()`）
+
+        :return: 见 code.gates.run_pre_signal_gates() docstring 的 schema。
+        """
+        from .gates import run_pre_signal_gates
+        return run_pre_signal_gates()
 
     def _conflict_check(self, signal: Signal) -> Optional[str]:
         """不确定性决策树 (Constitution §3)

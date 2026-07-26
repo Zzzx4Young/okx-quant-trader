@@ -256,57 +256,45 @@ def run_at_next_bar(
         logger.warning("⚠️ 跳过 Spin-lock（fallback 模式）")
 
     # 5. 调用 Runner.run()
-    # ─── Phase 3A P0：regime filter 守门（BTC UP/DOWN/SIDE 判定）───
-    # 在 Runner 启动前过一道 regime 闸，避免在不可入场 regime 下空转。
-    # 设计原则（详见 cross-strategy-a-vs-c.md）：
-    #   - UP+EMA多头 (ret>10%, EMA50>EMA200*1.02): ALL 拒入场
-    #   - SIDE (其他): 待人工评估，默认拒
-    #   - DOWN+EMA空头 (ret<-5%, EMA50<EMA200): 首选 A
-    # 若 regime_filter 校验失败（例说接口异常），fallback 到 Runner 自身的 filter。
+    # ─── Pre-signal gates（2026-07-26 委托 okx.code.gates.run_pre_signal_gates）───
+    # 与 Runner._pre_signal_gates() 共享同一 source of truth（消除先前 4 处 schema 漂移）：
+    #   ① circuit_breaker（cheap JSON read ~ms）
+    #   ② regime_filter    （load BTC klines + EMA ~100ms）
+    #   ③ Runner.run()     （OKX API + 订单 ~秒级）
+    # 任一闸阻断 → write_heartbeat + early return；两闸全 pass 才进 Runner.run()。
     try:
-        from okx.code.regime_filter import recommended_strategy
-        from okx.code.backtest.data_loader import load as load_klines
+        from okx.code.gates import run_pre_signal_gates
 
-        btc_data = load_klines("BTC-USDT-SWAP", "1h")
-        regime_strategy, regime_reason, regime_feats = recommended_strategy(btc_data.klines)
-        result["regime_decision"] = {
-            "strategy": regime_strategy,
-            "reason": regime_reason,
-            "features": {
-                "ret_90d_pct": regime_feats.get("ret_90d_pct"),
-                "ema50": regime_feats.get("ema50"),
-                "ema200": regime_feats.get("ema200"),
-                "ema_ratio": regime_feats.get("ema_ratio"),
-                "bars": regime_feats.get("bars"),
-            },
-        }
-        if regime_strategy is None:
-            ret = regime_feats.get("ret_90d_pct")
-            ratio = regime_feats.get("ema_ratio")
-            ret_str = f"{ret:+.1f}%" if ret is not None else "N/A"
-            ratio_str = f"{ratio:.3f}" if ratio is not None else "N/A"
-            logger.info(
-                f"🚦 regime_filter 拒入场: {regime_reason} | "
-                f"ret={ret_str}, EMA ratio={ratio_str}"
-            )
-            # 跳过 Runner.run()，直接写 heartbeat（让 watchdog 看到 "regime_skipped"）
-            result["runner_result"] = {
-                "signal_triggered": False,
-                "regime_skipped": True,
-                "errors": [],
-            }
+        gate_result = run_pre_signal_gates()
+        result["circuit_breaker"] = gate_result["circuit_breaker"]
+        # 漂移修复 #1：regime_decision → regime（与 Runner._pre_signal_gates 一致）
+        result["regime"] = gate_result["regime"]
+        result["errors"].extend(gate_result["errors"])
+
+        if not gate_result["passed"]:
+            # 阻断 → 写 heartbeat 让 watchdog 看到，再早退
+            stage = gate_result["stage"]
+            if stage == "circuit_breaker_blocked":
+                result["runner_result"] = {
+                    "signal_triggered": False,
+                    "circuit_breaker_blocked": True,
+                    "errors": [],
+                }
+            elif stage == "regime_skipped":
+                result["runner_result"] = {
+                    "signal_triggered": False,
+                    "regime_skipped": True,
+                    "errors": [],
+                }
             try:
                 _write_heartbeat(result)
             except Exception:
                 pass
             result["finished_at"] = datetime.now(timezone.utc).isoformat()
             return result
-        logger.info(
-            f"🚦 regime_filter 通过: 推荐 = {regime_strategy} | {regime_reason}"
-        )
     except Exception as e:
-        logger.exception(f"regime_filter 检查失败 (fallback 到 Runner 自身 filter): {e}")
-        result["errors"].append(f"regime_filter_failed: {e}")
+        logger.exception(f"pre_signal_gates 异常 (fallback 到 Runner.run): {e}")
+        result["errors"].append(f"pre_signal_gates_failed: {e}")
         # 不阻塞：fallback 到 Runner.run()
 
     try:
