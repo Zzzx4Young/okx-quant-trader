@@ -1,13 +1,13 @@
 # OKX 量化交易系统
 
-> **版本 v1.8.3** · 基于 OKX API v5 · 404/404 测试通过（其中核心 168+）· 3 活跃策略 (A/B/C) + D 永久禁用 + Constitution + 跨策略过滤 + Kelly 动态仓位 + 摩擦校准 + K 线驱动调度
+> **版本 v1.8.4** · 基于 OKX API v5 · **607/609 测试通过（607 passed + 2 skipped）+ 修复 11 broken imports** · 3 活跃策略 (A/C) + B 永久禁用 + D 移除 + Constitution + 跨策略过滤 + Kelly 动态仓位 + 摩擦校准 + K 线驱动调度 + 共享闸门 + regime filter
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-1.8.3-orange)](okx/__init__.py)
-[![Tests](https://img.shields.io/badge/tests-404%2F404-brightgreen)](tests/)
+[![Version](https://img.shields.io/badge/version-1.8.4-orange)](okx/__init__.py)
+[![Tests](https://img.shields.io/badge/tests-607%2F609-brightgreen)](tests/)
 [![License](https://img.shields.io/badge/license-Proprietary-lightgrey)](LICENSE)
 
-一个由 **Market Constitution（明文风控准则）** 驱动的加密货币自动化交易系统。当前激活 **3 个策略**（A EMA 趋势右侧 + B BB+RSI 震荡左侧 + C 波动率爆发）；D `FUNDING_RATE_REVERSAL` 已于 v1.8.3+ 永久禁用（config: `strategy_d.enabled=false`）。配合 Telegram 实时通知与 portfolio ↔ OKX 自动对账。
+一个由 **Market Constitution（明文风控准则）** 驱动的加密货币自动化交易系统。当前激活 **2 个策略**（A EMA 趋势右侧 + C 波动率爆发）；B `BB_RSI_REVERSION` 自 v1.8.3+ 永久禁用（Kelly f_full=-0.20 永久负值）；D `FUNDING_RATE_REVERSAL` 已于 v1.8.3+ 移除（config: `strategy_d.enabled=false`）。配合 Telegram 实时通知与 portfolio ↔ OKX 自动对账 + 共享闸门（code/gates.py）+ regime filter（择时必要条件）。
 
 **核心理念**：所有交易决策都来自代码 + 配置（不黑盒），所有凭据走环境变量（LLM 永远看不到明文）。
 
@@ -81,7 +81,7 @@
 | **外部仓 Sentinel** | 手动在 OKX Web 开的仓位不会被系统自动平仓（Defense-in-Depth） |
 | **Kelly 动态仓位 §3.2** | `calculate_kelly_size()` 经典 Kelly + Fractional 1/4 + 波动率缩仓 + `kelly_sizing_decision()` 纯决策包装 + Runner 集成 (v1.8.2)。Negative EV → 自动拒绝（C 策略正面启用，B 策略 BTC 1h 27.8% WR → Kelly 拒绝，与 fragility_scan 结论一致）|
 | **Micro-Live 锁参数 §5.2** | 杠杆锁 3x、单笔锁 1% 本金（路线图 Phase 5 准备） |
-| **396 单测** | pytest 全过（28 Kelly sizing + 13 Kelly decision + 15 portfolio stats + 32 §3 冲突 + Constitution 配置 + calibration + A+C double-lock 回归） |
+| **607 单测** | pytest 全过（607 passed + 2 skipped）。v1.8.4 修复 11 broken imports（`PYTHONPATH` 一致性 lesson 实证）+ 17 tag_trades_by_regime 单元测 + 13 gates 单元测 |
 
 ---
 
@@ -444,6 +444,24 @@ OKX REST API
 
 ---
 
+## 📊 `data/` 科学输出目录（v1.8.4 引入，commit `466c114`）
+
+从 `docs/agent-context/` 迁出至顶级 `data/`，tracked。**reproducibility 关键**：跨 session 可重建，避免 baseline 错案（如 7-25 "590 passed" 误报）。
+
+| 子目录 | 大小 | 内容 | 何时查阅 |
+|---|---|---|---|
+| `data/walkforward/` | ~6.8 MB | Phase 3A backtest 18 windows × 2 strategies × 3 cells | 写新策略 / 验证 v1.8.4 baseline |
+| `data/phase3b/` | ~316 KB | Phase 3B regime-tagged bootstrap 输入 (561 A + 690 C trades) | 跑 Phase 3B bootstrap 验证 regime_filter |
+| `data/montecarlo/` | ~332 KB | Phase 3C sensitivity analysis (6 run dirs) | slippage / fee 敏感性验证 |
+| `data/experiments/` | ~2.6 MB | 31 backtest experiment dirs (gate7 / v18 / kelly / diagnose) | 重做某个 experiment 时 |
+| `data/funding/` + `data/market/` | (legacy) | 预存在的市场数据 | 历史回放 |
+
+详细说明见 [data/README.md](data/README.md)。
+
+**注意**: V1 + V2 版本 backtest design report 已删除（V2.1 canonical），recovery 备份在 `/tmp/dup-cleanup-2026-07-27/`。
+
+---
+
 ## 📚 文档索引
 
 | 文档 | 内容 |
@@ -464,7 +482,7 @@ OKX REST API
 ### 跑测试
 
 ```bash
-# 全部测试（111 个）
+# 全部测试（607 个 + 2 skipped）
 pytest tests/ -v
 
 # 单类
