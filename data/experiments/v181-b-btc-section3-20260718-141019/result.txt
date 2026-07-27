@@ -1,0 +1,14 @@
+================================================================================
+脆弱性扫描 · B_BB_RSI_REVERSION · BTC-USDT-SWAP 1h · 5x leverage
+================================================================================
+
+  slip=  5bps fee= 5.5bps  ret= -34.33% sharpe=-1.693 trades= 45 win= 26.7%  Δ=-109.33pp ❌
+  slip=  5bps fee= 7.0bps  ret= -35.28% sharpe=-1.749 trades= 45 win= 26.7%  Δ=-110.28pp ❌
+  slip= 10bps fee= 5.5bps  ret= -42.53% sharpe=-2.153 trades= 45 win= 26.7%  Δ=-117.53pp ❌
+  slip= 10bps fee= 7.0bps  ret= -43.36% sharpe=-2.203 trades= 45 win= 26.7%  Δ=-118.36pp ❌
+  slip= 15bps fee= 5.5bps  ret= -49.10% sharpe=-2.484 trades= 45 win= 26.7%  Δ=-124.10pp ❌
+  slip= 15bps fee= 7.0bps  ret= -49.84% sharpe=-2.528 trades= 45 win= 26.7%  Δ=-124.84pp ❌
+  slip= 20bps fee= 5.5bps  ret= -58.20% sharpe=-2.996 trades= 45 win= 24.4%  Δ=-133.20pp ❌
+  slip= 20bps fee= 7.0bps  ret= -58.80% sharpe=-3.031 trades= 45 win= 24.4%  Δ=-133.80pp ❌
+
+→ viable: 0/8

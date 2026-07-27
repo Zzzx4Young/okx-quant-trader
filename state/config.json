@@ -32,7 +32,7 @@
       "sample_size": 50,
       "fill_rate_market": 1.0,
       "fill_rate_limit_offset_2bps": 0.48,
-      "source_experiment": "okx/docs/agent-context/experiments/diagnose_demo-gate7-btc-n50-v7-improved-20260718-065112",
+      "source_experiment": "okx/data/experiments/diagnose_demo-gate7-btc-n50-v7-improved-20260718-065112",
       "rerun_command": "python3 -m okx.scripts.diagnose_okx_demo --inst-id BTC-USDT-SWAP --n-trades 100 --jitter-seconds 1.0 --name gate7-btc-2026Q4"
     },
     "kelly": {
@@ -162,5 +162,6 @@
     "enabled": true,
     "min_interval_sec": 1,
     "daily_summary_hour_utc": 15
-  }
+  },
+  "source_experiment": ""
 }

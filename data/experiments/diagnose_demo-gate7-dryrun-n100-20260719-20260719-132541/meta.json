@@ -1,0 +1,46 @@
+{
+  "name": "gate7-dryrun-n100-20260719",
+  "inst_id": "BTC-USDT-SWAP",
+  "timestamp_utc": "20260719-132541",
+  "total_records": 100,
+  "gates_passed": true,
+  "gates": {
+    "avg_taker_slip_le_8bps": true,
+    "p95_taker_slip_le_15bps": true,
+    "fill_rate_ge_90pct": true
+  },
+  "stats": {
+    "by_type": {
+      "market": {
+        "count": 50,
+        "fill_rate": 1.0,
+        "avg_slip_bps": 5.125482823451564,
+        "avg_abs_slip_bps": 5.125482823451564,
+        "median_abs_slip_bps": 5.186212938553469,
+        "p95_abs_slip_bps": 6.7940774585230574,
+        "p99_abs_slip_bps": 6.958971207539673,
+        "max_abs_slip_bps": 6.958971207539673,
+        "avg_latency_ms": 124.58,
+        "p95_latency_ms": 187
+      },
+      "limit": {
+        "count": 50,
+        "fill_rate": 1.0,
+        "avg_slip_bps": 0.0,
+        "avg_abs_slip_bps": 0.0,
+        "median_abs_slip_bps": 0.0,
+        "p95_abs_slip_bps": 0.0,
+        "p99_abs_slip_bps": 0.0,
+        "max_abs_slip_bps": 0.0,
+        "avg_latency_ms": 111.82,
+        "p95_latency_ms": 193
+      }
+    },
+    "overall": {
+      "total_orders": 100,
+      "filled": 100,
+      "failed": 0,
+      "fill_rate": 1.0
+    }
+  }
+}

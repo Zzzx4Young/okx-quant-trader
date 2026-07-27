@@ -1,0 +1,44 @@
+================================================================================
+脆弱性扫描 · C_VOLATILITY_BREAKOUT · 1h · 5x leverage
+================================================================================
+
+【轴 1】Slippage 敏感性 (BTC, fee=5.5bps)
+--------------------------------------------------------------------------------
+  slip=   5bps  ret=  +2.59%  sharpe=+0.193  maxDD=+17.42%  trades= 25  win= 44.0%  slip_cost=$  291.81  fee=$  311.23
+  slip=  10bps  ret=  -5.48%  sharpe=-0.223  maxDD=+22.07%  trades= 25  win= 36.0%  slip_cost=$  577.35  fee=$  292.72
+  slip=  15bps  ret=  -8.94%  sharpe=-0.391  maxDD=+24.30%  trades= 25  win= 36.0%  slip_cost=$  853.07  fee=$  288.62
+  slip=  20bps  ret= -13.53%  sharpe=-0.622  maxDD=+27.52%  trades= 25  win= 36.0%  slip_cost=$ 1119.67  fee=$  281.91
+
+【轴 2】Fee 敏感性 (BTC, slip=10bps)
+--------------------------------------------------------------------------------
+  fee= 4.5bps  ret=  -4.98%  sharpe=-0.197  maxDD=+21.91%  trades= 25  win= 36.0%
+  fee= 5.5bps  ret=  -5.48%  sharpe=-0.223  maxDD=+22.07%  trades= 25  win= 36.0%
+  fee= 7.0bps  ret=  -6.24%  sharpe=-0.262  maxDD=+22.31%  trades= 25  win= 36.0%
+  fee= 8.5bps  ret=  -6.99%  sharpe=-0.302  maxDD=+22.55%  trades= 25  win= 36.0%
+
+【验证】ETH (slip=5bps, fee=5.5bps) — v1.7 已确认负收益,这里复测一下不同 slip
+--------------------------------------------------------------------------------
+  slip=   5bps  ret=  -1.62%  sharpe=+0.023  maxDD=+23.66%  trades= 47  win= 46.8%
+  slip=  10bps  ret= -13.09%  sharpe=-0.383  maxDD=+28.65%  trades= 47  win= 44.7%
+
+================================================================================
+【决策矩阵】
+--------------------------------------------------------------------------------
+  alpha 判定（BTC side，C 跑赢 buy-and-hold -6.49% 即为真 alpha）:
+
+  slip=  5bps:  C ret =  +2.59%  vs buy-hold =  +9.08pp  ✅ alpha still viable
+  slip= 10bps:  C ret =  -5.48%  vs buy-hold =  +1.01pp  ✅ alpha still viable
+  slip= 15bps:  C ret =  -8.94%  vs buy-hold =  -2.45pp  ❌ alpha destroyed
+  slip= 20bps:  C ret = -13.53%  vs buy-hold =  -7.04pp  ❌ alpha destroyed
+
+  fee 敏感性结论:
+  fee= 4.5bps:  C ret =  -4.98%  ✅
+  fee= 5.5bps:  C ret =  -5.48%  ✅
+  fee= 7.0bps:  C ret =  -6.24%  ✅
+  fee= 8.5bps:  C ret =  -6.99%  ❌
+
+  ETH 验证:
+  slip=  5bps:  C ret =  -1.62%  (✅ viable)
+  slip= 10bps:  C ret = -13.09%  (✅ viable)
+
+================================================================================

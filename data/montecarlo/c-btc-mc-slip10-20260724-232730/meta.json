@@ -1,0 +1,23 @@
+{
+  "name": "c-btc-mc-slip10",
+  "timestamp": "2026-07-24T15:27:30.936229+00:00",
+  "strategy": "EMA_CROSSOVER",
+  "symbol": "?",
+  "walkforward_dir": "/home/zzzx47/.openclaw/workspace/okx/data/walkforward/c-btc-wf-3m1m-20260724-191640",
+  "initial_capital_usd": 10000.0,
+  "n_real_trades": 230,
+  "n_simulations": 1000,
+  "sample_size_per_sim": 230,
+  "final_equity_p05": -3657.3850002004983,
+  "final_equity_p50": 2325.676208151412,
+  "final_equity_p95": 9030.05377287941,
+  "final_equity_mean": 2523.6398326021535,
+  "final_equity_std": 3822.38925601929,
+  "max_dd_p05": 0.3620546708185785,
+  "max_dd_p50": 0.8539233130824448,
+  "max_dd_p95": 1.3896369670166782,
+  "max_dd_mean": 0.8623137690552054,
+  "prob_ruin_50pct": 0.744,
+  "prob_ruin_30pct": 0.559,
+  "prob_ruin_10pct": 0.367
+}

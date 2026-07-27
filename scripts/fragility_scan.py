@@ -9,7 +9,7 @@ Fragility Scan —— 策略真实成本敏感性扫描（升档版）
 
 支持任意策略 × 任意标的 × slippage × fee 的 N×M 扫描，自动判定
 每个 cell 的 viability（vs buy-and-hold 或 vs 零基线），并把结果
-持久化到 docs/agent-context/experiments/<name>-<date>/，解决
+持久化到 data/experiments/<name>-<date>/，解决
 "fragility 结果只在 /tmp/，下次同名跑会覆盖"的痛点。
 
 ═══════════════════════════════════════════════════════════════════
@@ -560,7 +560,7 @@ def main():
     parser.add_argument("--name", required=True,
                         help="扫描名（用作输出目录前缀）")
     parser.add_argument("--out-root", default=None,
-                        help="输出根目录（默认 = 仓库根的 docs/agent-context/experiments，与 cwd 无关）")
+                        help="输出根目录（默认 = 仓库根的 data/experiments，与 cwd 无关）")
     parser.add_argument("--start-ts", type=int, default=None,
                         help="K 线窗口起始时间戳（毫秒）。None = parquet 最早。主要给 walkforward 用。")
     parser.add_argument("--end-ts", type=int, default=None,

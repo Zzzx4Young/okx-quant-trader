@@ -20,11 +20,11 @@ Phase 3C：将 walkforward 输出的 trades.parquet 作为"经验分布"，做
 
 输出：
   - console: result 摘要
-  - file: docs/agent-context/montecarlo/<run-name>/result.md
+  - file: data/montecarlo/<run-name>/result.md
 
 例：
   bash run.sh scripts/montecarlo.py \\
-      --walkforward-dir docs/agent-context/walkforward/c-btc-wf-3m1m-20260724-191640 \\
+      --walkforward-dir data/walkforward/c-btc-wf-3m1m-20260724-191640 \\
       --initial-capital 10000 \\
       --n-sims 1000 \\
       --name c-btc-mc-1k
@@ -331,7 +331,7 @@ def render_markdown(result: SimulationResult, meta: dict) -> str:
 
 
 def _output_root() -> Path:
-    """默认输出根：docs/agent-context/montecarlo/"""
+    """默认输出根：data/montecarlo/"""
     return Path(__file__).resolve().parent.parent / "docs" / "agent-context" / "montecarlo"
 
 
@@ -396,7 +396,7 @@ def main() -> None:
     parser.add_argument("--name", type=str, required=True,
                         help="输出名（用作目录前缀）")
     parser.add_argument("--out-root", type=Path, default=None,
-                        help="输出根目录（默认 = docs/agent-context/montecarlo/）")
+                        help="输出根目录（默认 = data/montecarlo/）")
     args = parser.parse_args()
 
     wf_dir = args.walkforward_dir.resolve()

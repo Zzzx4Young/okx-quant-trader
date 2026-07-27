@@ -1,0 +1,86 @@
+{
+  "experiment": "v182-kelly-btc-1h",
+  "version": "v1.8.2",
+  "date": "2026-07-18",
+  "time_cst": "23:54",
+  "purpose": "Validate Kelly Criterion per-trade decision behavior in backtest path",
+  "constitution_ref": "§3.2",
+  "parameters": {
+    "inst_id": "BTC-USDT-SWAP",
+    "bar": "1h",
+    "leverage": 3,
+    "slippage_bps": 5,
+    "fee_bps": 5.5,
+    "initial_capital": 10000.0,
+    "buy_hold_ref_pct": 85,
+    "min_trades_for_kelly": 30,
+    "fractional_kelly": 0.25,
+    "volatility_dampen_threshold": 1.5,
+    "volatility_dampen_factor": 0.7
+  },
+  "data_window": {
+    "start": "2026-04-05",
+    "end": "2026-07-18",
+    "duration_months": 3.5
+  },
+  "strategies_tested": [
+    "A_EMA20_BREAKOUT",
+    "B_BB_RSI_REVERSION",
+    "C_VOLATILITY_BREAKOUT"
+  ],
+  "summary": {
+    "A_EMA20_BREAKOUT": {
+      "baseline_trades": 20,
+      "kelly_trades": 20,
+      "rejected": 0,
+      "baseline_ret_pct": 4.007,
+      "kelly_ret_pct": 4.007,
+      "delta_pp": 0.0,
+      "kelly_decision": "fallback (n<30)"
+    },
+    "B_BB_RSI_REVERSION": {
+      "baseline_trades": 36,
+      "kelly_trades": 30,
+      "rejected": 6,
+      "baseline_ret_pct": -18.547,
+      "kelly_ret_pct": -21.342,
+      "delta_pp": -2.795,
+      "kelly_decision": "reject_negative_ev (after trade #30)",
+      "rejected_trade_pnl_net_usd": 279.5,
+      "surprise_finding": "rejected 6 trades were net-positive"
+    },
+    "C_VOLATILITY_BREAKOUT": {
+      "baseline_trades": 25,
+      "kelly_trades": 25,
+      "rejected": 0,
+      "baseline_ret_pct": 5.721,
+      "kelly_ret_pct": 5.721,
+      "delta_pp": 0.0,
+      "kelly_decision": "fallback (n<30)"
+    }
+  },
+  "key_findings": [
+    "A/C alpha 完全保留 (Kelly 不干扰 positive EV 策略)",
+    "B 策略 Kelly-on 反直觉地更亏 (-2.8pp), 因被拒 6 笔碰巧是 net-positive 窗口",
+    "Kelly 实际上把 B 策略变成 'auto-disabled' (这是 production 益处)",
+    "n<30 fallback 是关键设计: 早期数据积累期不拒绝"
+  ],
+  "production_implications": {
+    "A_strategy": "正常运作, Kelly 不干扰",
+    "B_strategy": "Kelly 自动 disable, 不再产生 -24% 损失 (fragility_scan v1.8.1)",
+    "C_strategy": "正常运作, alpha 完整保留"
+  },
+  "files": {
+    "result_txt": "result.txt",
+    "result_md": "result.md",
+    "meta_json": "meta.json",
+    "script": "okx/scripts/kelly_backtest_demo.py"
+  },
+  "tests_after": "396 passed / 2 skipped / 0 failed (zero regression)",
+  "related_commits": [
+    "96b8438 feat(sizing): Phase 5.3 Kelly Criterion 动态仓位实现 + Runner 集成 (v1.8.2)",
+    "cdfcd6c feat(risk): Phase 5.3 Kelly Criterion 动态仓位 (Phase 1)"
+  ],
+  "rating": "8.0/10",
+  "status": "completed"
+}

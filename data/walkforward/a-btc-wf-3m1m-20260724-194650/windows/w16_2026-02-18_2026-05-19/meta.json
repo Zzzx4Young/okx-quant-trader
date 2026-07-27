@@ -1,0 +1,65 @@
+{
+  "scan_name": "a-btc-wf-3m1m_w16",
+  "timestamp": "2026-07-24 19:46:50",
+  "strategy": "A_EMA20_BREAKOUT",
+  "symbol": "BTC-USDT-SWAP",
+  "bar": "1h",
+  "leverage": 5,
+  "initial_capital": 10000.0,
+  "buy_hold_ret_pct": 13.046,
+  "slippage_bps_list": [
+    5,
+    10,
+    15
+  ],
+  "fee_bps_list": [
+    5.0
+  ],
+  "git_commit": "e6a9ba1fbd2a1a1154cc54566666114587de9bc2",
+  "grid": [
+    {
+      "inst": "BTC-USDT-SWAP",
+      "bar": "1h",
+      "strategy": "A_EMA20_BREAKOUT",
+      "slippage_bps": 5,
+      "fee_bps": 5.0,
+      "ret_pct": 5.89,
+      "sharpe": 1.829,
+      "maxDD_pct": 4.905,
+      "trades": 3,
+      "win_rate_pct": 66.7,
+      "slip_cost": 19.46,
+      "fee_paid": 27.01
+    },
+    {
+      "inst": "BTC-USDT-SWAP",
+      "bar": "1h",
+      "strategy": "A_EMA20_BREAKOUT",
+      "slippage_bps": 10,
+      "fee_bps": 5.0,
+      "ret_pct": 5.794,
+      "sharpe": 1.799,
+      "maxDD_pct": 4.909,
+      "trades": 3,
+      "win_rate_pct": 66.7,
+      "slip_cost": 38.89,
+      "fee_paid": 26.99
+    },
+    {
+      "inst": "BTC-USDT-SWAP",
+      "bar": "1h",
+      "strategy": "A_EMA20_BREAKOUT",
+      "slippage_bps": 15,
+      "fee_bps": 5.0,
+      "ret_pct": 5.697,
+      "sharpe": 1.771,
+      "maxDD_pct": 4.913,
+      "trades": 3,
+      "win_rate_pct": 66.7,
+      "slip_cost": 58.3,
+      "fee_paid": 26.98
+    }
+  ],
+  "start_ts": 1771426800000,
+  "end_ts": 1779202800000
+}

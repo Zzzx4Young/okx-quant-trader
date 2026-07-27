@@ -1,0 +1,22 @@
+================================================================================
+脆弱性扫描 · C_VOLATILITY_BREAKOUT · BTC-USDT-SWAP 1h · 5x leverage
+================================================================================
+
+  slip=  5bps fee= 4.5bps  ret=  +3.15% sharpe=+0.223 trades= 25 win= 44.0%  Δ=-71.85pp ❌
+  slip=  5bps fee= 5.5bps  ret=  +2.59% sharpe=+0.193 trades= 25 win= 44.0%  Δ=-72.41pp ❌
+  slip=  5bps fee= 7.0bps  ret=  +1.75% sharpe=+0.148 trades= 25 win= 44.0%  Δ=-73.25pp ❌
+  slip=  5bps fee= 8.5bps  ret=  +0.92% sharpe=+0.103 trades= 25 win= 44.0%  Δ=-74.08pp ❌
+  slip= 10bps fee= 4.5bps  ret=  -4.98% sharpe=-0.197 trades= 25 win= 36.0%  Δ=-79.98pp ❌
+  slip= 10bps fee= 5.5bps  ret=  -5.48% sharpe=-0.223 trades= 25 win= 36.0%  Δ=-80.48pp ❌
+  slip= 10bps fee= 7.0bps  ret=  -6.24% sharpe=-0.262 trades= 25 win= 36.0%  Δ=-81.24pp ❌
+  slip= 10bps fee= 8.5bps  ret=  -6.99% sharpe=-0.302 trades= 25 win= 36.0%  Δ=-81.99pp ❌
+  slip= 15bps fee= 4.5bps  ret=  -8.46% sharpe=-0.366 trades= 25 win= 36.0%  Δ=-83.46pp ❌
+  slip= 15bps fee= 5.5bps  ret=  -8.94% sharpe=-0.391 trades= 25 win= 36.0%  Δ=-83.94pp ❌
+  slip= 15bps fee= 7.0bps  ret=  -9.67% sharpe=-0.429 trades= 25 win= 36.0%  Δ=-84.67pp ❌
+  slip= 15bps fee= 8.5bps  ret= -10.39% sharpe=-0.466 trades= 25 win= 36.0%  Δ=-85.39pp ❌
+  slip= 20bps fee= 4.5bps  ret= -13.07% sharpe=-0.598 trades= 25 win= 36.0%  Δ=-88.07pp ❌
+  slip= 20bps fee= 5.5bps  ret= -13.53% sharpe=-0.622 trades= 25 win= 36.0%  Δ=-88.53pp ❌
+  slip= 20bps fee= 7.0bps  ret= -14.22% sharpe=-0.658 trades= 25 win= 36.0%  Δ=-89.22pp ❌
+  slip= 20bps fee= 8.5bps  ret= -14.90% sharpe=-0.693 trades= 25 win= 36.0%  Δ=-89.90pp ❌
+
+→ viable: 0/16

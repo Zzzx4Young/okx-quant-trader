@@ -1,0 +1,9 @@
+================================================================================
+脆弱性扫描 · A_EMA20_BREAKOUT · BTC-USDT-SWAP 1h · 5x leverage
+================================================================================
+
+  slip=  5bps fee= 5.0bps  ret=  +1.36% sharpe=+0.534 trades=  5 win= 40.0%  Δ=+26.02pp ✅
+  slip= 10bps fee= 5.0bps  ret=  +1.07% sharpe=+0.424 trades=  5 win= 40.0%  Δ=+25.73pp ✅
+  slip= 15bps fee= 5.0bps  ret=  +0.78% sharpe=+0.325 trades=  5 win= 40.0%  Δ=+25.43pp ✅
+
+→ viable: 3/3

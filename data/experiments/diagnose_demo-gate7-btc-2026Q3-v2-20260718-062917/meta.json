@@ -1,0 +1,28 @@
+{
+  "name": "gate7-btc-2026Q3-v2",
+  "inst_id": "BTC-USDT-SWAP",
+  "timestamp_utc": "20260718-062917",
+  "total_records": 100,
+  "gates_passed": false,
+  "gates": {
+    "avg_taker_slip_le_8bps": false,
+    "p95_taker_slip_le_15bps": false,
+    "fill_rate_ge_90pct": false
+  },
+  "stats": {
+    "by_type": {
+      "market": {
+        "count": 0
+      },
+      "limit": {
+        "count": 0
+      }
+    },
+    "overall": {
+      "total_orders": 100,
+      "filled": 0,
+      "failed": 100,
+      "fill_rate": 0.0
+    }
+  }
+}

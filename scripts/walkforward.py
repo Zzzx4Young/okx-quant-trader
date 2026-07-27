@@ -474,7 +474,7 @@ def main():
     parser.add_argument("--name", required=True,
                         help="扫描名（用作输出目录前缀）")
     parser.add_argument("--out-root", default=None,
-                        help="输出根目录（默认 = docs/agent-context/walkforward/）")
+                        help="输出根目录（默认 = data/walkforward/）")
     args = parser.parse_args()
 
     if args.out_root is None:

@@ -1,0 +1,14 @@
+================================================================================
+脆弱性扫描 · C_VOLATILITY_BREAKOUT · ETH-USDT-SWAP 1h · 5x leverage
+================================================================================
+
+  slip=  5bps fee= 5.5bps  ret=  -1.62% sharpe=+0.023 trades= 47 win= 46.8%  Δ=-31.62pp ❌
+  slip=  5bps fee= 7.0bps  ret=  -2.89% sharpe=-0.023 trades= 47 win= 46.8%  Δ=-32.89pp ❌
+  slip= 10bps fee= 5.5bps  ret= -13.09% sharpe=-0.383 trades= 47 win= 44.7%  Δ=-43.09pp ❌
+  slip= 10bps fee= 7.0bps  ret= -14.20% sharpe=-0.425 trades= 47 win= 44.7%  Δ=-44.20pp ❌
+  slip= 15bps fee= 5.5bps  ret= -21.64% sharpe=-0.711 trades= 47 win= 40.4%  Δ=-51.64pp ❌
+  slip= 15bps fee= 7.0bps  ret= -22.63% sharpe=-0.751 trades= 47 win= 40.4%  Δ=-52.63pp ❌
+  slip= 20bps fee= 5.5bps  ret= -29.60% sharpe=-1.044 trades= 47 win= 40.4%  Δ=-59.60pp ❌
+  slip= 20bps fee= 7.0bps  ret= -30.48% sharpe=-1.083 trades= 47 win= 40.4%  Δ=-60.48pp ❌
+
+→ viable: 0/8

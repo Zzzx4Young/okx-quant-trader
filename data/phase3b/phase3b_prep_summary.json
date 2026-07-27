@@ -1,0 +1,24 @@
+{
+  "A": {
+    "n_trades": 561,
+    "n_windows": 18,
+    "n_cells": 3,
+    "regime_counts": {
+      "SIDE": 261,
+      "A": 204,
+      "UP": 96
+    },
+    "out_path": "data/phase3b/a_trades_with_regime.parquet"
+  },
+  "C": {
+    "n_trades": 690,
+    "n_windows": 18,
+    "n_cells": 3,
+    "regime_counts": {
+      "A": 303,
+      "SIDE": 276,
+      "UP": 111
+    },
+    "out_path": "data/phase3b/c_trades_with_regime.parquet"
+  }
+}

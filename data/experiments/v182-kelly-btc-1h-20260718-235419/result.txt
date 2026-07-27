@@ -1,0 +1,37 @@
+================================================================================
+v1.8.2 Kelly Criterion per-trade backtest simulation
+Constitution §3.2 — slip=5 bps, fee=5.5 bps, leverage=3x, BTC-USDT-SWAP 1h
+================================================================================
+
+▶ A_EMA20_BREAKOUT ...
+  baseline: trades=20 ret=+4.007% WR=40.0%
+  kelly-on: trades=20 ret=+4.007% rejected=0
+▶ B_BB_RSI_REVERSION ...
+  baseline: trades=36 ret=-18.547% WR=27.8%
+  kelly-on: trades=30 ret=-21.342% rejected=6
+▶ C_VOLATILITY_BREAKOUT ...
+  baseline: trades=25 ret=+5.721% WR=44.0%
+  kelly-on: trades=25 ret=+5.721% rejected=0
+
+================================================================================
+SUMMARY (Kelly-on vs baseline)
+================================================================================
+
+Strategy                   Trades_b   Trades_k   Rej     Ret_b%     Ret_k%     Δ_pp   WR_b   WR_k
+----------------------------------------------------------------------------------------------------
+A_EMA20_BREAKOUT                 20         20     0     +4.007     +4.007   +0.000   40.0   40.0
+B_BB_RSI_REVERSION               36         30     6    -18.547    -21.342   -2.795   27.8   23.3
+C_VOLATILITY_BREAKOUT            25         25     0     +5.721     +5.721   +0.000   44.0   44.0
+
+================================================================================
+REJECTION DETAIL (前 3 笔 reject 的 stats 摘要)
+================================================================================
+
+A_EMA20_BREAKOUT: (no rejections)
+
+B_BB_RSI_REVERSION:
+  trade # 30: n= 30 WR=23.33% avg_win=$ +224.03 avg_loss=$ +160.97 reason=kelly_reject
+  trade # 31: n= 31 WR=22.58% avg_win=$ +224.03 avg_loss=$ +161.06 reason=kelly_reject
+  trade # 32: n= 32 WR=21.88% avg_win=$ +224.03 avg_loss=$ +161.31 reason=kelly_reject
+
+C_VOLATILITY_BREAKOUT: (no rejections)

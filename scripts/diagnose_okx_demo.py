@@ -14,7 +14,7 @@ diagnose_okx_demo.py —— Phase 4 Gate 7：DEMO 账户 100 笔滑点抽样
   3. 每笔记录：request_px / exec_px / fill_ts / request_ts / abs_slip_bps
   4. 立即 reduce_only 平仓，不留 overnight 风险
   5. 间隔 jitter 1-3 秒避免被 OKX rate limit
-  6. 持久化到 docs/agent-context/experiments/<name>-YYYYMMDD-HHMMSS/
+  6. 持久化到 data/experiments/<name>-YYYYMMDD-HHMMSS/
 
 准入红线（Phase 4 Gate 7 release gate）：
   ✅ avg_taker_slip ≤ 8bps （与 fragility_scan 配套的实证验证）
@@ -27,7 +27,7 @@ CLI 例子：
       --name gate7-btc-2026Q3
 
 回滚：
-  rm -rf docs/agent-context/experiments/diagnose_demo-<ts>/
+  rm -rf data/experiments/diagnose_demo-<ts>/
 """
 
 from __future__ import annotations
@@ -471,7 +471,7 @@ def persist_experiment(
 ) -> Path:
     """持久化实验结果（4 件套）"""
     ts_str = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    base = Path(out_root or "okx/docs/agent-context/experiments")
+    base = Path(out_root or "okx/data/experiments")
     exp_dir = base / f"diagnose_demo-{name}-{ts_str}"
     exp_dir.mkdir(parents=True, exist_ok=True)
 

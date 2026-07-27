@@ -1,0 +1,58 @@
+[
+  {
+    "idx": 0,
+    "ord_type": "market",
+    "side": "buy",
+    "request_px": 63935.0,
+    "exec_px": 63970.3,
+    "fill_ts_ms": 1784356869649,
+    "request_ts_ms": 1784356869474,
+    "latency_ms": 175,
+    "abs_slip_bps": 5.521232501760055,
+    "signed_slip_bps": 5.521232501760055,
+    "order_id": "3753213195760865280",
+    "error": null
+  },
+  {
+    "idx": 1,
+    "ord_type": "limit",
+    "side": "buy",
+    "request_px": 63903.0325,
+    "exec_px": null,
+    "fill_ts_ms": null,
+    "request_ts_ms": 1784356871552,
+    "latency_ms": null,
+    "abs_slip_bps": null,
+    "signed_slip_bps": null,
+    "order_id": "3753213265587638272",
+    "error": null
+  },
+  {
+    "idx": 2,
+    "ord_type": "market",
+    "side": "sell",
+    "request_px": 63935.0,
+    "exec_px": 63948.7,
+    "fill_ts_ms": 1784356875448,
+    "request_ts_ms": 1784356875286,
+    "latency_ms": 162,
+    "abs_slip_bps": 2.142801282552137,
+    "signed_slip_bps": -2.142801282552137,
+    "order_id": "3753213390343016448",
+    "error": null
+  },
+  {
+    "idx": 3,
+    "ord_type": "limit",
+    "side": "sell",
+    "request_px": 63966.9675,
+    "exec_px": 63969.2,
+    "fill_ts_ms": 1784356877295,
+    "request_ts_ms": 1784356877119,
+    "latency_ms": 176,
+    "abs_slip_bps": 0.34900825961434767,
+    "signed_slip_bps": -0.34900825961434767,
+    "order_id": "3753213452318052352",
+    "error": null
+  }
+]

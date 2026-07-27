@@ -1,0 +1,9 @@
+================================================================================
+脆弱性扫描 · C_VOLATILITY_BREAKOUT · BTC-USDT-SWAP 1h · 5x leverage
+================================================================================
+
+  slip=  5bps fee= 5.0bps  ret=  -4.59% sharpe=-0.660 trades= 23 win= 43.5%  Δ= -4.01pp ❌
+  slip= 10bps fee= 5.0bps  ret=  -9.39% sharpe=-1.448 trades= 23 win= 39.1%  Δ= -8.81pp ❌
+  slip= 15bps fee= 5.0bps  ret= -12.59% sharpe=-1.927 trades= 23 win= 39.1%  Δ=-12.02pp ❌
+
+→ viable: 0/3

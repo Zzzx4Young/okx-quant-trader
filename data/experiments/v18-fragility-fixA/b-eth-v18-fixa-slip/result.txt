@@ -1,0 +1,10 @@
+================================================================================
+脆弱性扫描 · B_BB_RSI_REVERSION · ETH-USDT-SWAP 1h · 5x leverage
+================================================================================
+
+  slip=  5bps fee= 5.5bps  ret= -26.58% sharpe=-1.839 trades= 32 win= 28.1%  Δ=-19.16pp ❌
+  slip= 10bps fee= 5.5bps  ret= -31.09% sharpe=-2.122 trades= 32 win= 25.0%  Δ=-23.67pp ❌
+  slip= 15bps fee= 5.5bps  ret= -35.43% sharpe=-2.372 trades= 32 win= 21.9%  Δ=-28.01pp ❌
+  slip= 20bps fee= 5.5bps  ret= -38.51% sharpe=-2.584 trades= 32 win= 21.9%  Δ=-31.09pp ❌
+
+→ viable: 0/4
