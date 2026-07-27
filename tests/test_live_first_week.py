@@ -126,7 +126,7 @@ class FakeConfig:
 
 def _make_runner(*, demo_mode, live_first_week_enabled, whitelist, first_tick_age_days=None):
     """构造 Runner 实例, mock 重 client/config/portfolio, 仅测试 _pre_risk_check。"""
-    from code.runner import Runner
+    from okx.code.runner import Runner
 
     runner = Runner.__new__(Runner)
     runner._config = FakeConfig(

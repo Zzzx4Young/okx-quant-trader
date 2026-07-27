@@ -26,8 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import pytest
 
-from code.risk import RiskCalculator
-from code.config import Config
+from okx.code.risk import RiskCalculator
+from okx.code.config import Config
 
 
 # ──────────── Fixtures ────────────

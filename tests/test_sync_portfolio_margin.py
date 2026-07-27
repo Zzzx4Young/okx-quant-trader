@@ -43,7 +43,7 @@ def test_btc_short_notional_uses_ct_val():
     notional = 64486.5 × 0.16 × 0.01 = $103.18  ✅
     margin   = notional / 3 = $34.39  ✅
     """
-    from scripts import sync_portfolio
+    from okx.scripts import sync_portfolio
 
     op = _build_op(mark=64486.5, sz=0.16, lever=3.0, ct_val=0.01)
     # 调用 sync_portfolio 内部函数 (mapping logic)
@@ -61,7 +61,7 @@ def test_eth_short_notional_uses_ct_val():
     notional = 3000 × 1.0 × 0.1 = $300
     margin   = $300 / 3 = $100
     """
-    from scripts import sync_portfolio
+    from okx.scripts import sync_portfolio
 
     op = _build_op(mark=3000.0, sz=1.0, lever=3.0, ct_val=0.1)
     op["instId"] = "ETH-USDT-SWAP"
@@ -74,7 +74,7 @@ def test_eth_short_notional_uses_ct_val():
 
 def test_no_100x_overcount_regression():
     """v1.8.3 candidate #6 核心反例: 不能用 notional = mark × sz (会算大 100 倍)"""
-    from scripts import sync_portfolio
+    from okx.scripts import sync_portfolio
 
     op = _build_op(mark=64486.5, sz=0.16, lever=3.0, ct_val=0.01)
     notional_usd, _, _ = sync_portfolio._normalize_position(op)

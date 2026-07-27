@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from unittest.mock import patch, Mock
 
 _HERE = Path(__file__).resolve()
 _PROJECT_ROOT = _HERE.parents[2]
@@ -30,6 +31,7 @@ from okx.code.regime_filter import (
     resample_to_daily,
     _compute_features,
     recommended_strategy,
+    tag_trades_by_regime,
     DEFAULT_UP_RET_THRESHOLD,
     DEFAULT_DOWN_RET_THRESHOLD,
     DEFAULT_EMA_BULLISH_RATIO,
@@ -340,3 +342,214 @@ class TestRegimePatternFromWalkforward:
         assert strategy == expected_strategy, (
             f"regime={regime_mock} expected={expected_strategy} got={strategy}, reason={reason}"
         )
+
+
+# ────────────────────────────────────────────────────────────────────
+# tag_trades_by_regime() —— 后验标签添加
+# ────────────────────────────────────────────────────────────────────
+class TestTagTradesByRegime:
+    """为 trades 加 '_regime' 列（4 label: A / UP / SIDE / UNKNOWN）
+
+    Mock 策略：patch `okx.code.backtest.data_loader.load` →
+    返回 Mock(klines=<regime-specific klines>) → 让 recommended_strategy
+    跑真实逻辑（验证 integration）。Exception / 防御性 case 直接 mock
+    推荐策略返回值。
+
+    Lessons applied (来自 7-26 mock target drift 复盘):
+    - patch 写完整 module path (okx.code.X.Y) 而非 from-import 名字
+    - 不用 monkey-patch 同一个 instance；每个 test 用 fresh context manager
+    """
+
+    @staticmethod
+    def _make_trades(n: int, *, window_id: str = "w0") -> pd.DataFrame:
+        """构造 mock trades DataFrame"""
+        return pd.DataFrame({
+            "window_id": [window_id] * n,
+            "exit_ts": [1700000000000 + i * 1000 for i in range(n)],
+            "symbol": ["BTC-USDT-SWAP"] * n,
+        })
+
+    def test_missing_window_id_raises(self):
+        """trades 缺少 window_id 列 → KeyError"""
+        df = pd.DataFrame({"exit_ts": [1700000000000], "symbol": ["BTC-USDT-SWAP"]})
+        with pytest.raises(KeyError, match="window_id"):
+            tag_trades_by_regime(df)
+
+    def test_empty_trades_returns_empty_with_regime_column(self):
+        """空 DataFrame → 返回空 + _regime 列"""
+        df = pd.DataFrame(columns=["window_id", "exit_ts"])
+        result = tag_trades_by_regime(df)
+        assert len(result) == 0
+        assert "_regime" in result.columns
+
+    def test_returns_copy_not_mutates_original(self):
+        """原 DataFrame 不被修改"""
+        df = self._make_trades(3)
+        original_columns = list(df.columns)
+        _ = tag_trades_by_regime(df)
+        assert list(df.columns) == original_columns
+        assert "_regime" not in df.columns
+
+    def test_returns_same_length(self):
+        """输出长度 == 输入长度"""
+        df = self._make_trades(5)
+        with patch("okx.code.backtest.data_loader.load") as mock_load:
+            mock_load.return_value = Mock(klines=make_regime_klines("DOWN_STRONG"))
+            result = tag_trades_by_regime(df)
+        assert len(result) == len(df)
+
+    def test_single_window_down_strong_tagged_a(self):
+        """单 window + DOWN regime → 全部 trades 标 A"""
+        df = self._make_trades(3)
+        with patch("okx.code.backtest.data_loader.load") as mock_load:
+            mock_load.return_value = Mock(klines=make_regime_klines("DOWN_STRONG"))
+            result = tag_trades_by_regime(df)
+        assert (result["_regime"] == "A").all()
+        # 同一 window 只调一次 load（dedup by window_id）
+        assert mock_load.call_count == 1
+
+    def test_single_window_up_strong_tagged_up(self):
+        """单 window + UP regime → 全部 trades 标 UP"""
+        df = self._make_trades(3)
+        with patch("okx.code.backtest.data_loader.load") as mock_load:
+            mock_load.return_value = Mock(klines=make_regime_klines("UP_STRONG"))
+            result = tag_trades_by_regime(df)
+        assert (result["_regime"] == "UP").all()
+
+    def test_single_window_side_tagged_side(self):
+        """单 window + SIDE regime → 全部 trades 标 SIDE"""
+        df = self._make_trades(3)
+        with patch("okx.code.backtest.data_loader.load") as mock_load:
+            mock_load.return_value = Mock(klines=make_regime_klines("SIDE"))
+            result = tag_trades_by_regime(df)
+        assert (result["_regime"] == "SIDE").all()
+
+    def test_data_insufficient_trades_tagged_side(self):
+        """empty klines (data insufficient) → 标 SIDE（不符合 docstring，应为 UNKNOWN）
+
+        ⚠️ 已知 docstring vs code 不一致：
+          - docstring 行 18-24: 'UNKNOWN' = 数据不足
+          - code 行 254-258: ret_90d_pct=None 走 else 分支 → 标 SIDE!
+        本测试记录当前实现行为（不修 bug，避免越权）+ 等 Nixil 确认是否应该
+        把 ret_90d is None 路径重定向到 UNKNOWN。
+        """
+        df = self._make_trades(2)
+        with patch("okx.code.backtest.data_loader.load") as mock_load:
+            mock_load.return_value = Mock(
+                klines=pd.DataFrame(columns=["timestamp", "close"])
+            )
+            result = tag_trades_by_regime(df)
+        assert (result["_regime"] == "SIDE").all()  # 当前行为
+
+    def test_load_klines_exception_tagged_unknown(self):
+        """load_klines 抛异常 → 全部 trades 标 UNKNOWN"""
+        df = self._make_trades(3)
+        with patch("okx.code.backtest.data_loader.load") as mock_load:
+            mock_load.side_effect = Exception("klines load failed")
+            result = tag_trades_by_regime(df)
+        assert (result["_regime"] == "UNKNOWN").all()
+
+    def test_other_strategy_letter_tagged_unknown(self):
+        """regime_filter 推荐 B/C（防御）→ 标 UNKNOWN"""
+        df = self._make_trades(3)
+        # 同时 patch load + recommended_strategy：load 走 mocked klines，
+        # 但 recommended_strategy 直接返回 B（模拟未来扩展或异常路径）
+        with patch("okx.code.backtest.data_loader.load") as mock_load, \
+             patch("okx.code.regime_filter.recommended_strategy") as mock_rs:
+            mock_load.return_value = Mock(klines=make_regime_klines("DOWN_STRONG"))
+            mock_rs.return_value = ("B", "BB_RSI_REVERSION", {
+                "ret_90d_pct": -15.0, "ema_ratio": 0.87, "ema50": 65000.0,
+                "ema200": 75000.0, "last_price": 65000.0, "bars": 250,
+            })
+            result = tag_trades_by_regime(df)
+        assert (result["_regime"] == "UNKNOWN").all()
+
+    def test_multiple_windows_shared_regime(self):
+        """同一 window_id 共用 regime；不同 window_id 各自 dedup"""
+        df = pd.DataFrame({
+            "window_id": ["w0"] * 5 + ["w1"] * 3,
+            "exit_ts": [1700000000000 + i * 1000 for i in range(8)],
+            "symbol": ["BTC-USDT-SWAP"] * 8,
+        })
+        with patch("okx.code.backtest.data_loader.load") as mock_load:
+            mock_load.return_value = Mock(klines=make_regime_klines("DOWN_STRONG"))
+            result = tag_trades_by_regime(df)
+        # 2 unique windows → 2 calls（不是 8 trades × 1）
+        assert mock_load.call_count == 2
+        assert (result[result["window_id"] == "w0"]["_regime"] == "A").all()
+        assert (result[result["window_id"] == "w1"]["_regime"] == "A").all()
+
+    def test_multiple_windows_different_regimes(self):
+        """不同 window_id 可有不同 regime"""
+        df = pd.DataFrame({
+            "window_id": ["w0_down"] * 3 + ["w1_up"] * 3,
+            "exit_ts": [1700000000000 + i * 1000 for i in range(6)],
+            "symbol": ["BTC-USDT-SWAP"] * 6,
+        })
+        # 第一次 call 回 DOWN klines → A；第二次回 UP klines → UP
+        with patch("okx.code.backtest.data_loader.load") as mock_load:
+            mock_load.side_effect = [
+                Mock(klines=make_regime_klines("DOWN_STRONG")),
+                Mock(klines=make_regime_klines("UP_STRONG")),
+            ]
+            result = tag_trades_by_regime(df)
+        assert (result[result["window_id"] == "w0_down"]["_regime"] == "A").all()
+        assert (result[result["window_id"] == "w1_up"]["_regime"] == "UP").all()
+
+    def test_end_ts_taken_as_window_max(self):
+        """window 的 end_ts = 该 window 末笔 exit_ts（max）"""
+        df = pd.DataFrame({
+            "window_id": ["w0"] * 3,
+            "exit_ts": [1000, 5000, 3000],  # max = 5000
+            "symbol": ["BTC-USDT-SWAP"] * 3,
+        })
+        with patch("okx.code.backtest.data_loader.load") as mock_load:
+            mock_load.return_value = Mock(klines=make_regime_klines("DOWN_STRONG"))
+            tag_trades_by_regime(df)
+            # 验证传入 load 的 end_ts = 5000 (window max)
+            assert mock_load.call_args.kwargs["end_ts"] == 5000
+
+    def test_custom_end_ts_column(self):
+        """自定义 end_ts_column 名"""
+        df = pd.DataFrame({
+            "window_id": ["w0"] * 2,
+            "close_ts": [1700000000000, 1700000003000],
+            "symbol": ["BTC-USDT-SWAP"] * 2,
+        })
+        with patch("okx.code.backtest.data_loader.load") as mock_load:
+            mock_load.return_value = Mock(klines=make_regime_klines("DOWN_STRONG"))
+            result = tag_trades_by_regime(df, end_ts_column="close_ts")
+        assert (result["_regime"] == "A").all()
+
+    def test_custom_window_id_column(self):
+        """自定义 window_id_column 名"""
+        df = pd.DataFrame({
+            "session": ["s0"] * 2,
+            "exit_ts": [1700000000000, 1700000003000],
+            "symbol": ["BTC-USDT-SWAP"] * 2,
+        })
+        with patch("okx.code.backtest.data_loader.load") as mock_load:
+            mock_load.return_value = Mock(klines=make_regime_klines("DOWN_STRONG"))
+            result = tag_trades_by_regime(df, window_id_column="session")
+        assert (result["_regime"] == "A").all()
+
+    def test_default_symbol_and_bar(self):
+        """默认 symbol='BTC-USDT-SWAP'，bar='1h'"""
+        df = self._make_trades(1)
+        with patch("okx.code.backtest.data_loader.load") as mock_load:
+            mock_load.return_value = Mock(klines=make_regime_klines("DOWN_STRONG"))
+            tag_trades_by_regime(df)
+            args, kwargs = mock_load.call_args
+            assert args[0] == "BTC-USDT-SWAP"
+            assert args[1] == "1h"
+            assert "end_ts" in kwargs
+
+    def test_regime_column_no_nan(self):
+        """merge 后 _regime 列无 NaN（fillna=UNKNOWN 兜底）"""
+        df = self._make_trades(3)
+        with patch("okx.code.backtest.data_loader.load") as mock_load:
+            mock_load.return_value = Mock(klines=make_regime_klines("DOWN_STRONG"))
+            result = tag_trades_by_regime(df)
+        assert result["_regime"].notna().all()
+        valid = {"A", "UP", "SIDE", "UNKNOWN"}
+        assert set(result["_regime"].unique()).issubset(valid)
