@@ -675,7 +675,11 @@ class BacktestEngine:
             self.equity += gross
             
             # 如果是 SL fill → 仓位全平，标记给外层 finalize（修 Bug 1）
-            if fill.fill_type == "sl":
+            # Bug fix 2026-07-28 (related): SL check guard 加了 current_size > 0
+            # → 之前 phantom SL fill 是触发 TP-closed trade finalize 的唯一机制
+            # 现在 SL check 阻止了 phantom → TP-close 路径需要新触发
+            # 修后：TP tranche 把 current_size 减到 0 后也 set position=None
+            if fill.fill_type == "sl" or pos.current_size == 0:
                 self.position = None
     
     def _finalize_trade(self, reason: str, exit_ts: int, exit_idx: int):

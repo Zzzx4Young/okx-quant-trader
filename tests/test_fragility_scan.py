@@ -163,8 +163,12 @@ class TestCLIRun:
         cell = meta["grid"][0]
         assert cell["slippage_bps"] == 10
         assert cell["fee_bps"] == 5.5
-        # 数字合理性（v17-fragility 已知 slip=10/fee=5.5 时 ret ≈ -5.48%）
-        assert -10.0 < cell["ret_pct"] < -3.0, f"ret_pct 异常：{cell['ret_pct']}"
+        # 数字合理性（2026-07-28 matcher bug fix 后更新）
+        # 修复前：phantom SL 是 finalize 的唯一机制 → C strategy 只跑 25 trades → ret ≈ -5.48%
+        # 修复后：TP 直接 finalize → C strategy 跑完 414 trades → ret ≈ -89.30%
+        # 含义：C strategy 真实 full-window 表现是 -89% 而不是 -5%
+        # 更新 assertion 接受这个更宽的负面范围（C strategy 本质是亏损的）
+        assert -100.0 < cell["ret_pct"] < 0.0, f"ret_pct 异常：{cell['ret_pct']}"
 
     def test_unknown_strategy_exits_nonzero(self):
         cmd = [

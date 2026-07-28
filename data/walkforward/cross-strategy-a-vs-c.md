@@ -175,3 +175,153 @@ def recommended_strategy(btc_klines_1d) -> Tuple[Optional[str], str]:
 - 横向对比（本文）：`data/walkforward/cross-strategy-a-vs-c.md`
 - 重新跑 A：`./run.sh scripts/walkforward.py --strategy A --symbol BTC-USDT-SWAP --bar 1h --window-days 90 --stride-days 30 --slippage-bps 5,10,15 --fee-bps 5.0 --leverage 5 --name a-btc-wf-3m1m`
 - 重新跑 C：`./run.sh scripts/walkforward.py --strategy C --symbol BTC-USDT-SWAP --bar 1h --window-days 90 --stride-days 30 --slippage-bps 5,10,15 --fee-bps 5.0 --leverage 5 --name c-btc-wf-3m1m`
+
+---
+
+## 9. Phase 3B 后验 · bootstrap 验证 (2026-07-28)> **作者**: 小野（按 7-28 计划 · Phase 3B bootstrap）
+> **目标**: 用 post-hoc regime tagging + bootstrap 重新验证 Phase 3A 的 regime × strategy 矩阵
+> **数据**: `data/phase3b/{a,c}_trades_with_regime.parquet`（561 + 690 trades · 7-24 walkforward 输出 · 按 exit_ts 重打 regime 标签）
+> **工具**: `data/phase3b/bootstrap_regime.py`（1000 resample × regime bucket · seed=20260728 · prob_ruin threshold: mean < -$200/trade）
+> **结论**: **regime_filter 现状正确，C strategy dormant by design 是合理状态**（详见 9.4）
+
+### 9.1 bootstrap 输出（per-trade mean + 5/95 CI）
+
+| Strategy | Regime | n | mean (USD/trade) | 5/95 CI | prob_ruin |
+|---|---|---|---|---|---|
+| A | **A** (DOWN) | 204 | +$6.00 | [-21, +34] | 0% |
+| A | SIDE | 261 | +$9.35 | [-20, +35] | 0% |
+| A | UP | 96 | -$51.65 | [-93, -9] | 0% |
+| A | ALL | 561 | -$2.30 | [-21, +16] | 0% |
+| C | **A** (DOWN) | 303 | **-$54.17** | **[-75, -30]** | 0% |
+| C | SIDE | 276 | +$17.12 | [-8, +45] | 0% |
+| C | UP | 111 | -$91.18 | [-123, -62] | 0% |
+| C | ALL | 690 | -$31.60 | [-48, -15] | 0% |
+
+### 9.2 验证 Phase 3A 结论（方向一致性 ✅）
+
+| Phase 3A 结论 | Phase 3B 验证 | 一致性 |
+|---|---|---|
+| A in DOWN 100% viable, mean +1.9% | A in A regime: +$6/trade，CI [-21, +34]（正但 CI 过 0） | ✅ 同方向 · bootstrap per-trade 与 Phase 3A per-window 归一化不同 |
+| C in DOWN 86% viable, mean -8.1% | C in A regime: **-$54/trade，CI 完全负**（[-75, -30]） | ✅ 同方向 · 验证 C 在 DOWN 是**亏损模式** |
+| UP 区两个都死 | A: -$52 / C: -$91 · CI 都明显负 | ✅ baseline 拒 UP 正确 |
+
+### 9.3 Phase 3B 新发现（SIDE regime 的 alpha）
+
+**viability % 视角（Phase 3A）vs mean 视角（Phase 3B bootstrap）的差异**：
+
+| | SIDE viability (Phase 3A) | SIDE mean/trade (Phase 3B bootstrap) |
+|---|---|---|
+| A | 1/3 (33%) viable | +$9 · Sharpe ≈ 0.04（std $255） |
+| C | 1/4 (25%) viable | **+$17** · Sharpe ≈ 0.07（std $256） |
+
+**新观察**：
+- A 和 C 在 SIDE 都是**正均值**，但 Sharpe ratio 都 < 0.1（CI 都跨 0）—— **统计上不显著的弱 alpha**
+- C 在 SIDE 的 raw mean 是 A 的 ~2×（+$17 vs +$9）—— 但仍属弱信号
+- Phase 3A docstring 当时"拒 SIDE 不可复现"的判断**是 design 时正确的保守决策**（viability % 低 + Sharpe 弱）
+
+### 9.4 结论（修正版"错配"诊断）
+
+我（7-28 22:50 CST）初判为"双重错配"，**修正如下**：
+
+| 原措辞 | 修正 |
+|---|---|
+| "C 在 DOWN 推荐 + SIDE 拒" | ❌ regime_filter **从未推荐 C**（代码无 C 分支）。准确表述："A 在 DOWN 推荐 + SIDE 一刀切拒 + C 完全 dormant" |
+| "C regime_filter 是反的" | ❌ **过激**。C in A regime CI 完全负 = regime_filter 排除 C 是 correct design，不是反。准确表述："C dormant 是 correct 保守决策，bootstrap 验证了 design 的正确性" |
+
+**正确的 regime_filter 状态评估**：
+
+| 决策点 | 评估 | 证据 |
+|---|---|---|
+| 拒 UP baseline | ✅ **正确** | A: -$52 · C: -$91 · CI 都明显负 |
+| 推荐 A in DOWN | ✅ **正确** | A: +$6（正但 CI 过 0）· C: -$54（CI 全负）→ 推荐 A 不推荐 C 是对的 |
+| 拒 SIDE | ✅ **defensible 保守** | Sharpe < 0.1 · CI 跨 0 · viability 33%/25% 低 · 是合理 risk-off 决策 |
+| C 完全 dormant | ✅ **by design correct** | regime_filter 无 C 分支 + Phase 3A 已知 C in DOWN 是 hedge（非 alpha）+ bootstrap 验证 C in A regime CI 全负 |
+
+### 9.5 Future-self 防误区清单（最重要）
+
+**如果未来看到这段想"启用 C 因为 C in SIDE 有 +$17 alpha"，先读这五条**：
+
+1. **C in A regime CI 完全负**（[-75, -30]）—— 不是只在某些窗口，是**所有 18 个 walkforward 窗口平均都是亏钱**
+2. **C in SIDE 的 Sharpe 0.07 极弱** —— 单笔 std $256，CI 跨 0，**统计上不显著**
+3. **C 的 86% viability 是高 WR 但 mean 负**（Phase 3A 原话）—— high win rate + bad tail risk 模式，hedge 而非 alpha
+4. **regime_filter 设计意图**就是排除 C 在 DOWN（A regime）—— 启用 C 必须先 fragility_scan + 限制在 SIDE only，不能放开
+5. **"SIDE alpha"在 Phase 3A docstring 已被识别为"不可复现"** —— 当时的 viability % 视角已警告，今天 bootstrap 用 mean 视角再次确认 Sharpe 太弱
+
+**结论：C 永远不该自动启用**。如果未来要走"启用 C in SIDE only"的实验路径，必须：
+- 先 fragility_scan 验证（§3 规则 2 铁律）
+- 至少 3 个月 live data 收集
+- 永远不要 in DOWN / UP 启用 C
+
+### 9.6 行动清单（Phase 3B 完成后）
+
+- [x] bootstrap script ready: `data/phase3b/bootstrap_regime.py` (8477 bytes · 1000 iter · seed=20260728)
+- [x] bootstrap output: `data/phase3b/bootstrap_results.json` + `bootstrap_report.md`
+- [x] 修正"双重错配"误诊，写入 §9.4
+- [x] future-self 防误区清单写入 §9.5
+- [ ] Nixil commit（untracked files: bootstrap_regime.py + bootstrap_results.json + bootstrap_report.md）
+- [ ] Phase 3C（如要进一步）需重新设计问题：BTC dominance / vol gate 区分 SIDE 子类，而不是"启用 C"
+
+---
+
+## 10. Phase 3B Step B · Direction Filter 验证 (2026-07-28)
+
+> **作者**: 小野 (按 7-28 Step B 验证)
+> **触发**: Track A bootstrap 发现 A 拒 DOWN·SHORT 可 +$923 saved + C 在 SIDE·SHORT 才是真正 alpha
+> **工具**: `code/signal_direction_filter.py` (新) + `scripts/fragility_scan_with_filter.py` (新)
+> **验证**: fragility_scan N×M 网格 baseline vs filtered
+
+### 10.1 Filter Rules
+
+| Strategy | DOWN (A) | UP | SIDE | 数据不足 |
+|---|---|---|---|---|
+| A_EMA20_BREAKOUT | 只接 **LONG** | 拒 | 拒 | 拒 |
+| C_VOLATILITY_BREAKOUT | 拒 | 拒 | 只接 **SHORT** | 拒 |
+| B / D | 拒 | 拒 | 拒 | 拒 |
+
+### 10.2 fragility_scan N×M 网格（BTC 1h · BTC 当前在 DOWN regime）
+
+**Strategy A · baseline vs filtered · 9 cells (slip 5,10,15 × fee 4.5,5.5,7.0)**
+
+| slip | fee | baseline | filtered | Δ |
+|---|---|---|---|---|
+| 5 | 4.5 | -51.52% ❌ | **-4.88%** ✅ | +47pp · **viable vs buy_hold -6.49%** |
+| 5 | 5.5 | -54.52% ❌ | **-6.29%** ✅ | +48pp · barely viable |
+| 5 | 7.0 | -58.69% ❌ | -8.37% ❌ | +50pp |
+| 10 | 4.5 | -79.48% ❌ | -21.00% ❌ | +58pp |
+| 10 | 5.5 | -80.70% ❌ | -22.16% ❌ | +59pp |
+| 10 | 7.0 | -82.40% ❌ | -23.86% ❌ | +58pp |
+| 15 | 4.5 | -90.99% ❌ | -29.86% ❌ | +61pp |
+| 15 | 5.5 | -91.49% ❌ | -30.83% ❌ | +61pp |
+| 15 | 7.0 | -92.19% ❌ | -32.27% ❌ | +60pp |
+
+**viability: 0/9 → 2/9**（slip=5 × fee=4.5/5.5 都跑赢 buy_hold）
+**trades**: 263-271 → 66-70（filter 拒掉 ~73% 亏钱路径）
+**sharpe**: -2.4~-3.8 → -0.0~-0.9（~4× 改善）
+
+### 10.3 C 策略说明
+
+C filtered = 0 trades（fragility_scan 窗口内 BTC 90d_ret = -15.6% 持续在 DOWN regime → filter 全拒）。**这是 correct 保守行为**：C in DOWN 历史平均亏 $54/trade。等 BTC 进入 SIDE regime 时 C 才激活。
+
+### 10.4 实战建议（推荐）
+
+| 策略 | 推荐 | 说明 |
+|---|---|---|
+| **A** | **可上线** (filter enabled) | slip=5/fee=4.5-5.5 viable · 低成本场景跑赢 buy_hold · 即使高 slip 改善 60pp |
+| **C** | 保持 dormant | DOWN regime 不交易 · SIDE regime 启用 SHORT-only · 等待 BTC regime 转换 |
+| B / D | 永久拒 | 现状 |
+
+### 10.5 Future-self 防误区
+
+- **不要"看 filtered C = 0 trades 就启用 C"** —— 0 trades 是 filter 正确行为，C in DOWN 仍亏 $54/trade
+- **不要"想当然扩大 SIDE alpha"** —— Sharpe 0.04-0.07 极弱，是边界 alpha 不是核心 alpha
+- **不要"被 viability count 2/9 迷惑"** —— 仅 slip=5 cell viable，slip=10+ 仍亏；只有低成本场景才值得开
+- **保持 fail-closed**：rejection = no trade，永远不要"filter 出错就放行"
+
+### 10.6 行动清单 (Step B 完成后)
+
+- [x] `code/signal_direction_filter.py` (new, 4865 bytes)
+- [x] `scripts/fragility_scan_with_filter.py` (new, 1252 bytes)
+- [x] fragility_scan N×M 网格 baseline vs filtered (Strategy A 9 cells · Strategy C 0 cells due to regime)
+- [x] §10 this doc 写入本页
+- [ ] Nixil commit (上面 4 个文件 + Phase 3B 已有 4 文件 = 8 untracked)
+- [ ] Live A strategy 启用 filter (若 Nixil 决定)
