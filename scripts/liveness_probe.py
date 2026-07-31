@@ -55,6 +55,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+# v1.4 Phase 1 (P3#4-B): SQLite history store hook (非致命)
+try:
+    from okx.web.backend.db import record_health_metric as _record_health_metric
+    from okx.web.backend.events import publish_event as _publish_event
+    _DB_AVAILABLE = True
+    _SSE_AVAILABLE = True
+except Exception as _e:  # pragma: no cover
+    _DB_AVAILABLE = False
+    _SSE_AVAILABLE = False
+    logging.getLogger(__name__).warning(f"SQLite / SSE unavailable: {_e}")
+
 logger = logging.getLogger(__name__)
 
 
@@ -127,18 +138,24 @@ PROBE_CONFIG: dict = {
         description="runner_watchdog cron 每 15min 写入（Layer 1-4 健康检查）",
     ),
     "logs/heartbeat.log": LivenessThreshold(
-        warn_sec=20 * 3600,     # 20h
-        crit_sec=26 * 3600,     # 26h
+        # 2026-07-31 P0-1 修复 (okx/problem.md P-1, okx/tests/test_liveness_probe.py):
+        # cron `0 21 * * *` 周期 = 24h = 86400s。原阈值 warn=20h, crit=26h 错配 → 永久 stale 误报。
+        # 新阈值: warn=28h (1 周期 + 4h slack 容忍 cron delay/clock drift)，
+        #         crit=52h (2 周期 + 4h slack → 1 次 miss 后升级)。
+        warn_sec=28 * 3600,     # 28h (1 cron period + 4h slack)
+        crit_sec=52 * 3600,     # 52h (2 cron periods + 4h slack)
         description="heartbeat_push.py cron 每日 21:00 CST 推送一次",
     ),
     "logs/anomaly_diagnosis.log": LivenessThreshold(
-        warn_sec=20 * 3600,     # 20h
-        crit_sec=26 * 3600,     # 26h
+        # 2026-07-31 P0-1 修复: cron `0 0 * * *` 周期 = 24h, 同 heartbeat 错配模式。
+        warn_sec=28 * 3600,     # 28h
+        crit_sec=52 * 3600,     # 52h
         description="anomaly_diagnosis cron 每日 00:00 CST 扫 runner.log",
     ),
     "logs/daily_review.log": LivenessThreshold(
-        warn_sec=20 * 3600,     # 20h
-        crit_sec=26 * 3600,     # 26h
+        # 2026-07-31 P0-1 修复: cron `30 23 * * *` 周期 = 24h, 同 heartbeat 错配模式。
+        warn_sec=28 * 3600,     # 28h
+        crit_sec=52 * 3600,     # 52h
         description="ai_daily_review cron 每日 AI 复盘",
     ),
 }
@@ -279,6 +296,36 @@ def main() -> None:
 
     report = run_probe()
     persist_report(report)
+
+    # v1.4 Phase 1: 写 health metrics 到 SQLite (非致命)
+    if _DB_AVAILABLE:
+        for c in report.checks:
+            try:
+                _record_health_metric(
+                    component=c.name,
+                    level=c.level,
+                    age_seconds=c.age_seconds,
+                    detail=c.threshold,
+                )
+            except Exception as _e:  # pragma: no cover
+                logging.getLogger(__name__).warning(
+                    f"DB write failed for {c.name}: {_e}"
+                )
+
+    # v1.4 Phase 2 (P3#4-A): publish event 到 SSE bus (非致命)
+    if _SSE_AVAILABLE:
+        try:
+            _publish_event(
+                "liveness_check",
+                {
+                    "overall_level": report.overall_level,
+                    "ok_count": report.ok_count,
+                    "warn_count": report.warn_count,
+                    "critical_count": report.critical_count,
+                },
+            )
+        except Exception as _e:  # pragma: no cover
+            logging.getLogger(__name__).warning(f"SSE publish failed: {_e}")
 
     if args.json:
         print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))

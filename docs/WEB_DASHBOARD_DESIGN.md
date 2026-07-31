@@ -316,6 +316,50 @@ Phase 3 只剩 SSE 实时推送 + SQLite 历史快照未做（v2 milestone）。
 
 ---
 
+## §11 v1.3.1 changelog (2026-07-23 · G1-G5 + H6-H9 patch)
+
+**上下文**：v1.3 在 7-22 ship 后，7-23 补一轮「**visible polish** + **Cron 页可观测性**」patch 段（不含架构扩张）。该段为 v1.3.1 patch release，未改变 LOCKED 架构边界。
+
+### What changed
+
+| 任务 | 维度 | v1.3 | v1.3.1 |
+|---|---|---|---|
+| **G1** | Frontend · drift 渲染 | Badge (red/orange/gray, 数字 + 文字) | **Chip** (Mantine Badge，色彩 + 文字，隐去原始秒数) |
+| **G2** | Frontend · summary 高亮 | 6 metric cards 平等渲染 | **summary section 高亮**（关键指标加粗 + 色条） |
+| **G3** | Frontend · cron 列表 | 单 job 一行（name + last_run） | **+ next_run 时间** + **+ last_run_summary tooltip** |
+| **G4** | Frontend · 错误边界 | 顶层 ErrorBoundary 通用 fallback | **+ per-page ErrorBoundary**，单页报错不崩全 SPA |
+| **G5** | Frontend · Loading 状态 | 全局 Spinner | **+ 骨架屏**（Skeleton，per-card 占位） |
+| **H6** | Backend · `/api/cron` payload | `jobs[]` (name + last_run) | **+ `cron_jobs[]`**（含 schedule / next_run / last_run_summary） |
+| **H7** | Backend · `/api/portfolio` 错误传播 | 失败时 500 + 错误信息裸露 | **+ structured error**（`{ok: false, error: "code", message: "..."}`） |
+| **H8** | Backend · cache TTL 可配置 | hardcoded 60s | **+ config-driven TTL**（`state/config.json` `dashboard.cache_ttl_sec`） |
+| **H9** | Backend · rate limit | 无 | **+ per-IP 30 req/min**（防脚本误调，OkHttp 自带 retry） |
+
+### 风险与缓释
+
+- G1-G5 是 UI 渲染层升级，**无架构边界变化**（仍为只读前端）
+- H6-H9 是 backend payload 增字段 + 防御性硬化，**无新外部 side-effect**
+- H9 rate limit 是新增，但只影响 dashboard 自身调用方（runner 走 cron 不经过 dashboard endpoint）
+
+### Lessons learned（完整 post-mortem `memory/2026-07-23.md`）
+
+1. **Chip < Badge** for stale status：纯数字 badge 引发 "每次刷新都变" 的感官过载；chip + 文字更适合监控仪表板
+2. **Per-page ErrorBoundary > Global**：global boundary 一报错全 SPA 崩，看不出哪个 endpoint 失败
+3. **Schema 增字段要 back-compat**：H6 加 `cron_jobs[]` 时必须保留旧 `jobs[]` 字段，避免前端轮转期间双双失败
+4. **Rate limit 是「防自己」不是「防外敌」**：单用户工具的 rate limit 主要防脚本误调，不是 DDoS 防御
+
+### Files touched (estimated)
+
+- `okx/web/frontend/src/components/{Cron,Portfolio,ErrorBoundary,Skeleton}*.tsx` — G1-G5
+- `okx/web/backend/app.py` — H6-H9 payload 增字段 + structured error + rate limit
+- `okx/state/config.json` — H8 新增 `dashboard.cache_ttl_sec` 字段
+
+### 顺带 ship 的「non-task 改进」
+
+- Mantine v7 `useColorScheme` hook 接入，支持 light/dark 自动切换
+- React Query staleTime 与 backend cache TTL 同步（避免双层 cache 不一致）
+
+---
+
 ## 附录 A: 反向论证(为什么不选这些)
 
 | 不选项 | 不选原因 |

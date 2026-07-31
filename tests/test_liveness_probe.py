@@ -205,12 +205,59 @@ def test_probe_config_has_runner_log_threshold():
 
 
 def test_probe_config_has_heartbeat_push_threshold():
-    """logs/heartbeat.log 是 daily-level，阈值应该是 ~24h"""
+    """logs/heartbeat.log 是 daily-cadence（cron `0 21 * * *` 周期 24h）。
+
+    关键断言（2026-07-31 P0-1 修复, okx/problem.md P-1）：
+    - warn_sec 必须 > 24h 周期，否则每次 cron 执行后第 4h 开始 stale 误报
+    - crit_sec 必须 > 48h（2 倍周期），允许 1 次 miss 后升级到 critical
+
+    历史佐证：2026-07-31 19:36 daily_review WARN, 20:06 anomaly WARN 是
+    cron 周期 24h 但 warn_sec=20h 错配的直接结果（runtime 已 cascade 验证）。
+    """
     assert "logs/heartbeat.log" in PROBE_CONFIG
     threshold = PROBE_CONFIG["logs/heartbeat.log"]
-    # crit 应是 ~24-26h（一天一次）
-    assert 20 * 3600 <= threshold.warn_sec < 26 * 3600
-    assert 24 * 3600 <= threshold.crit_sec <= 30 * 3600
+    # warn 必须 > 24h 周期（86400s）
+    assert threshold.warn_sec > 24 * 3600, (
+        f"heartbeat.log warn_sec={threshold.warn_sec}s ≤ 24h cron 周期 → 慢性 stale 误报"
+    )
+    # crit 必须 > 48h（2 倍周期）
+    assert threshold.crit_sec > 2 * 24 * 3600, (
+        f"heartbeat.log crit_sec={threshold.crit_sec}s ≤ 48h → 无法区分真故障和正常周期"
+    )
+
+
+def test_probe_config_all_daily_cadence_logs_have_above_period_thresholds():
+    """所有 daily-cadence log（cron 周期 24h）必须 warn > 24h, crit > 48h
+
+    P0-1 修复（okx/problem.md P-1）：
+    - logs/heartbeat.log          (cron `0 21 * * *`  @ Asia/Shanghai)
+    - logs/anomaly_diagnosis.log  (cron `0 0 * * *`   @ Asia/Shanghai)
+    - logs/daily_review.log       (cron `30 23 * * *` @ Asia/Shanghai)
+
+    当前 bug (2026-07-31 已确认): 三个 log 全部 warn=20h, crit=26h
+    → 每次 cron 执行后第 4h 开始 WARN, 永久 stale 误报
+    → runtime 19:36 / 20:06 已 cascade 验证（runtime context 时间线）
+    """
+    daily_logs = [
+        "logs/heartbeat.log",
+        "logs/anomaly_diagnosis.log",
+        "logs/daily_review.log",
+    ]
+    for log_name in daily_logs:
+        assert log_name in PROBE_CONFIG, (
+            f"{log_name} 必须在 PROBE_CONFIG 中（见 scripts/liveness_probe.py:110-145）"
+        )
+        t = PROBE_CONFIG[log_name]
+        # warn 必须 > 24h cron 周期
+        assert t.warn_sec > 24 * 3600, (
+            f"{log_name} warn_sec={t.warn_sec}s (={t.warn_sec/3600:.1f}h) "
+            f"≤ 24h cron 周期 → 慢性 stale 误报"
+        )
+        # crit 必须 > 48h（2 倍周期，允许 1 次 miss 后升级）
+        assert t.crit_sec > 2 * 24 * 3600, (
+            f"{log_name} crit_sec={t.crit_sec}s (={t.crit_sec/3600:.1f}h) "
+            f"≤ 48h（2 倍 cron 周期）→ 无法区分真故障和正常周期"
+        )
 
 
 def test_probe_config_is_all_logs_only():

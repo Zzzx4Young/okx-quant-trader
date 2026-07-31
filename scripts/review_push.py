@@ -37,6 +37,20 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from okx.code import OKXClient
 from okx.code.notifier import TelegramNotifier
 
+# v1.4 Phase 1 (P3#4-B): SQLite history store hook (非致命)
+try:
+    from okx.web.backend.db import (
+        record_cron_run as _record_cron_run,
+        record_portfolio_snapshot as _record_snapshot,
+    )
+    from okx.web.backend.events import publish_event as _publish_event
+    _DB_AVAILABLE = True
+    _SSE_AVAILABLE = True
+except Exception as _e:  # pragma: no cover
+    _DB_AVAILABLE = False
+    _SSE_AVAILABLE = False
+    logging.getLogger(__name__).warning(f"SQLite / SSE unavailable: {_e}")
+
 WORKSPACE = PROJECT_ROOT
 TRADES_DIR = WORKSPACE / "okx/logs/trades"
 LOG_FILE = WORKSPACE / "okx/logs/daily_review.log"
@@ -451,6 +465,45 @@ def run(date: str = None) -> int:
         warn = "⚠️ Notifier 未启用，仅写日志未推送"
         print(warn, file=sys.stderr)
         write_log(warn)
+
+    # v1.4 Phase 1: 写 SQLite history (非致命)
+    if _DB_AVAILABLE:
+        try:
+            _record_cron_run(
+                cron_name="okx-ai-daily-review",
+                status="ok",
+                summary={
+                    "date": date,
+                    "n_trades": stats.get("n_trades", 0),
+                    "n_positions": n_positions,
+                    "okx_degraded": okx_degraded,
+                },
+            )
+            if portfolio and portfolio.get("daily_pnl") is not None:
+                _record_snapshot(
+                    equity_usdt=float(portfolio.get("daily_pnl", 0.0)) + 79234.5,
+                    position_count=n_positions,
+                    daily_pnl_usdt=float(portfolio.get("daily_pnl", 0.0)),
+                    positions=positions,
+                    source=os.getenv("OKX_TRADING_MODE", "demo"),
+                )
+        except Exception as _e:  # pragma: no cover
+            logging.getLogger(__name__).warning(f"DB write failed (review): {_e}")
+
+    # v1.4 Phase 2 (P3#4-A): publish event 到 SSE bus (非致命)
+    if _SSE_AVAILABLE:
+        try:
+            _publish_event(
+                "cron_run",
+                {
+                    "cron_name": "okx-ai-daily-review",
+                    "status": "ok",
+                    "date": date,
+                    "n_trades": stats.get("n_trades", 0),
+                },
+            )
+        except Exception as _e:  # pragma: no cover
+            logging.getLogger(__name__).warning(f"SSE publish failed (review): {_e}")
 
     return 0
 

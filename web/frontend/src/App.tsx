@@ -21,6 +21,7 @@ import { BacktestDetailPage } from './pages/BacktestDetail'
 import { BacktestComparePage } from './pages/BacktestCompare'
 import { WalkforwardListPage } from './pages/WalkforwardList'
 import { WalkforwardDetailPage } from './pages/WalkforwardDetail'
+import { ChartsPage } from './pages/Charts'
 
 type RunSummary = {
   id: string
@@ -40,7 +41,7 @@ type RunSummary = {
   best_sharpe: number | null
 }
 
-type PageId = 'portfolio' | 'cron' | 'query' | 'backtest-list' | 'backtest-detail' | 'backtest-compare' | 'walkforward-list' | 'walkforward-detail'
+type PageId = 'portfolio' | 'cron' | 'query' | 'backtest-list' | 'backtest-detail' | 'backtest-compare' | 'walkforward-list' | 'walkforward-detail' | 'charts'
 
 const NAV_ITEMS: Array<{
   id: PageId
@@ -76,6 +77,12 @@ const NAV_ITEMS: Array<{
     description: '滚动窗口跨 regime 稳健性 · 18 窗口 BTC 1h',
     badge: 'Phase 3A',
   },
+  {
+    id: 'charts',
+    label: 'Charts',
+    description: '历史 equity curve · health timeline · cron success rate',
+    badge: 'v1.4',
+  },
 ]
 
 const PAGE_TITLES: Record<PageId, string> = {
@@ -87,6 +94,7 @@ const PAGE_TITLES: Record<PageId, string> = {
   'backtest-compare': 'Compare · OKX Web',
   'walkforward-list': 'Walkforward · OKX Web',
   'walkforward-detail': 'Walkforward Detail · OKX Web',
+  'charts': 'Charts · OKX Web',
 }
 
 export default function App() {
@@ -209,6 +217,7 @@ export default function App() {
       <AppShell.Main>
         {page === 'portfolio' && <PortfolioPage />}
         {page === 'cron' && <CronPage />}
+        {page === 'charts' && <ChartsPage />}
         {page === 'query' && <QueryPage />}
         {page === 'backtest-list' && (
           <BacktestListPage

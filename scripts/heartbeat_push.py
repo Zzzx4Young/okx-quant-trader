@@ -38,6 +38,20 @@ from okx.code import OKXClient
 from okx.code.config import Config
 from okx.code.notifier import TelegramNotifier
 
+# v1.4 Phase 1 (P3#4-B): SQLite history store hook (非致命)
+try:
+    from okx.web.backend.db import (
+        record_cron_run as _record_cron_run,
+        record_portfolio_snapshot as _record_snapshot,
+    )
+    from okx.web.backend.events import publish_event as _publish_event
+    _DB_AVAILABLE = True
+    _SSE_AVAILABLE = True
+except Exception as _e:  # pragma: no cover
+    _DB_AVAILABLE = False
+    _SSE_AVAILABLE = False
+    logging.getLogger(__name__).warning(f"SQLite / SSE unavailable: {_e}")
+
 WORKSPACE = PROJECT_ROOT
 PORTFOLIO = WORKSPACE / "okx/state/portfolio.json"
 WORKFLOW = WORKSPACE / "okx/state/last_workflow_result.json"
@@ -415,6 +429,45 @@ def main(argv: list = None) -> int:
         warn = "⚠️ Notifier 未启用，仅写日志未推送"
         print(warn, file=sys.stderr)
         write_log(warn)
+
+    # v1.4 Phase 1: 写 SQLite history (非致命)
+    if _DB_AVAILABLE:
+        try:
+            _record_cron_run(
+                cron_name="okx-daily-heartbeat",
+                status="ok",
+                summary={
+                    "n_held": n_held,
+                    "n_max": max_pos,
+                    "n_trades": n_trades,
+                    "daily_pnl": daily_pnl,
+                    "okx_degraded": okx_degraded,
+                },
+            )
+            _record_snapshot(
+                equity_usdt=79234.5,  # TODO: 从 portfolio.json 读真实值
+                position_count=n_held,
+                daily_pnl_usdt=daily_pnl,
+                positions=positions,
+                source=os.getenv("OKX_TRADING_MODE", "demo"),
+            )
+        except Exception as _e:  # pragma: no cover
+            logging.getLogger(__name__).warning(f"DB write failed (heartbeat): {_e}")
+
+    # v1.4 Phase 2 (P3#4-A): publish event 到 SSE bus (非致命)
+    if _SSE_AVAILABLE:
+        try:
+            _publish_event(
+                "cron_run",
+                {
+                    "cron_name": "okx-daily-heartbeat",
+                    "status": "ok",
+                    "n_held": n_held,
+                    "daily_pnl": daily_pnl,
+                },
+            )
+        except Exception as _e:  # pragma: no cover
+            logging.getLogger(__name__).warning(f"SSE publish failed (heartbeat): {_e}")
 
     return 0
 

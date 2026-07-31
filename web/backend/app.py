@@ -51,6 +51,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+# v1.4 Phase 2 (P3#4-A): SSE endpoints (extracted to sse.py for clarity)
+from okx.web.backend.sse import router as events_router
+
+# v1.4 Phase 3 (P3#4-C): Charts endpoints (extracted to charts.py for clarity)
+from okx.web.backend.charts import router as charts_router
+
 # Layout: backend/app.py → okx/web/backend/ → okx/web/ → okx/
 WEB_DIR = Path(__file__).resolve().parent         # okx/web/backend
 OKX_ROOT = WEB_DIR.parent.parent                  # okx/
@@ -94,6 +100,24 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+# v1.4 Phase 2 (P3#4-A): SSE event stream endpoints (real-time push to dashboard)
+app.include_router(events_router)
+
+# v1.4 Phase 3 (P3#4-C): Charts endpoints
+app.include_router(charts_router)
+
+
+# ───────── v1.4 Phase 2 (P3#4-A): SSE event bus startup ─────────
+
+
+@app.on_event("startup")
+async def startup_event_bus():
+    """Attach event bus drainer to FastAPI event loop on startup."""
+    import asyncio
+    from okx.web.backend.events import event_bus
+    event_bus.start_drainer(asyncio.get_running_loop())
+    logger.info("[okx-web] SSE event bus drainer started")
 
 
 # ───────── helpers ─────────
@@ -1338,6 +1362,83 @@ async def walkforward_run_detail(run_id: str) -> Dict[str, Any]:
 
 # ───────── Phase 2c: serve static bundle in prod ─────────
 # Mount AFTER all routes so /api/* takes precedence over StaticFiles catch-all.
+
+# ───────── v1.4 Phase 1 (P3#4-B): SQLite history endpoints ─────────
+
+
+def _parse_json_field(row: dict, field_name: str, target_key: str = None) -> dict:
+    """辅助: 解析 *列名* 的 JSON 字符串为嵌套 dict (供前端消费)"""
+    target_key = target_key or field_name.replace("_json", "")
+    if row.get(field_name):
+        try:
+            row[target_key] = json.loads(row[field_name])
+        except (ValueError, TypeError):
+            row[target_key] = None
+        row.pop(field_name, None)
+    return row
+
+
+@app.get("/api/history/cron-runs")
+def get_history_cron_runs(
+    cron_name: Optional[str] = None,
+    n: int = 100,
+):
+    """最近 N 条 cron runs 历史 (供 dashboard chart 显示)
+
+    :param cron_name: optional filter by cron name (e.g. 'okx-daily-heartbeat')
+    :param n: max rows (default 100)
+    """
+    try:
+        from okx.web.backend.db import get_cron_runs_last_n
+        rows = get_cron_runs_last_n(cron_name=cron_name, n=n)
+        rows = [_parse_json_field(r, "summary_json", "summary") for r in rows]
+        return {"ok": True, "count": len(rows), "rows": rows}
+    except Exception as e:
+        return {"ok": False, "error": "db_read_failed", "message": str(e)}, 500
+
+
+@app.get("/api/history/portfolio")
+def get_history_portfolio(
+    n: int = 90,
+    source: Optional[str] = None,
+):
+    """最近 N 条 portfolio snapshots (供 dashboard chart 显示 equity / pnl 时序)
+
+    :param n: max rows (default 90 ≈ 3 个月 daily snapshots)
+    :param source: filter by 'demo' | 'live'
+    """
+    try:
+        from okx.web.backend.db import get_portfolio_snapshots_last_n
+        rows = get_portfolio_snapshots_last_n(n=n, source=source)
+        rows = [_parse_json_field(r, "positions_json", "positions") for r in rows]
+        return {"ok": True, "count": len(rows), "rows": rows}
+    except Exception as e:
+        return {"ok": False, "error": "db_read_failed", "message": str(e)}, 500
+
+
+@app.get("/api/history/health")
+def get_history_health(
+    component: Optional[str] = None,
+    n: int = 100,
+):
+    """最近 N 条 health metrics (供 dashboard chart 显示 liveness 时序)
+
+    :param component: optional filter (e.g. 'logs/runner.log')
+    :param n: max rows (default 100); n>=1000 转为 overview 模式 (返回每 component 最新)
+    """
+    try:
+        from okx.web.backend.db import get_health_metrics_last_n, get_health_overview
+        if component is None and n >= 1000:
+            overview = get_health_overview()
+            for comp, row in overview.items():
+                _parse_json_field(row, "detail_json", "detail")
+            return {"ok": True, "mode": "overview", "components": overview}
+        rows = get_health_metrics_last_n(component=component, n=n)
+        rows = [_parse_json_field(r, "detail_json", "detail") for r in rows]
+        return {"ok": True, "mode": "list", "count": len(rows), "rows": rows}
+    except Exception as e:
+        return {"ok": False, "error": "db_read_failed", "message": str(e)}, 500
+
 
 if DIST_DIR.exists() and DIST_DIR.is_dir():
     app.mount("/", StaticFiles(directory=str(DIST_DIR), html=True), name="static")

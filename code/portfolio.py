@@ -10,6 +10,8 @@ OKX 交易组合状态管理器
 """
 
 import json
+import os
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -142,10 +144,45 @@ class Portfolio:
         return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     def _save(self) -> None:
-        """持久化到磁盘"""
+        """原子写：tmp + fsync + os.replace
+
+        2026-07-31 P0-2 修复 (okx/problem.md P-3, okx/tests/test_portfolio_atomic.py):
+        原实现 `with open(path, "w") as f: json.dump(...)` 是"立即 truncate + 写",
+        任何崩溃（SIGKILL / OOM / 断电 / 磁盘满）都会留下截断 JSON → 下次 _load 抛
+        JSONDecodeError → 系统起不来。
+
+        修复后:
+          1. tempfile.mkstemp 在同目录（同 fs, 保证 os.replace 原子）创建临时文件
+          2. 写 tmp + flush + os.fsync 强制落盘
+          3. os.replace 原子 rename (POSIX rename 语义, Windows MoveFileEx 同效)
+          4. 任何异常 → unlink(tmp) + re-raise, 避免残留
+
+        历史佐证: state/portfolio.json.bak-20260724-231941-circuit
+                  是 circuit_breaker 在 _save 崩溃后 dump 的残缺文件。
+        """
         self._data["updated_at"] = self._now_iso()
-        with open(self._path, "w", encoding="utf-8") as f:
-            json.dump(self._data, f, indent=2, ensure_ascii=False)
+
+        # 1. 在同目录创建临时文件（os.replace 要求 src/dst 同 fs）
+        dir_name = str(self._path.parent)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=dir_name,
+            prefix=f".{self._path.name}.",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self._data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())  # 强制内核 buffer 落盘
+            # 2. 原子 rename: 任意时刻崩溃, self._path 要么是旧版本（完整）要么是新版本（完整）
+            os.replace(tmp_path, self._path)
+        except Exception:
+            # 3. 清理 tmp 文件（success 路径 tmp 已被 replace 走, 这里只处理失败路径）
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+            raise
 
     # ---- 持仓操作 ----
 
