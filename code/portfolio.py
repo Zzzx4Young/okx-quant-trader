@@ -58,7 +58,7 @@ class Portfolio:
         设计目的: sync 阶段如果 bug 丢字段，宁可启动失败也不要静默用错数据。
         —— 金融场景宁可 startup fail 也不要自动 reset (避免误抹历史)。
 
-        :raises ValueError: schema 缺失关键字段
+        :raises ValueError: schema 缺失关键字段 或 业务 invariant 被破坏
         """
         required_top = {
             "version", "updated_at", "positions", "daily_stats", "closed_positions"
@@ -84,6 +84,33 @@ class Portfolio:
                 f"Found: {sorted(self._data.get('daily_stats', {}).keys())}. "
                 f"Path: {self._path}"
             )
+
+        # ── 不变量 I-4 防护: 所有 open positions 的 size 必须 > 0 且有限 ──
+        # Bug 防御: 反向开仓时 size 计算错产生 0/负数；部分平仓残留幽灵仓位
+        # 发现于 2026-08-02 invariant audit (test_invariants.py::I-4)
+        for idx, pos in enumerate(self._data.get("positions", [])):
+            size = pos.get("size")
+            if size is None:
+                raise ValueError(
+                    f"portfolio.json invariant I-4 破坏: positions[{idx}].size 缺失. "
+                    f"Path: {self._path}"
+                )
+            if not isinstance(size, (int, float)) or isinstance(size, bool):
+                raise ValueError(
+                    f"portfolio.json invariant I-4 破坏: positions[{idx}].size "
+                    f"类型错误 (got {type(size).__name__}). Path: {self._path}"
+                )
+            if not (size > 0):
+                raise ValueError(
+                    f"portfolio.json invariant I-4 破坏: positions[{idx}].size "
+                    f"必须 > 0 (got {size}, symbol={pos.get('symbol')}). Path: {self._path}"
+                )
+            import math as _math
+            if not _math.isfinite(size):
+                raise ValueError(
+                    f"portfolio.json invariant I-4 破坏: positions[{idx}].size "
+                    f"非有限值 (got {size}). Path: {self._path}"
+                )
 
     def _default_state(self) -> Dict[str, Any]:
         return {
