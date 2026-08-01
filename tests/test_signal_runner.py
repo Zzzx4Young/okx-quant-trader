@@ -191,12 +191,15 @@ def test_dry_run_mode(capsys):
 # ──────────── heartbeat 写入 ────────────
 
 
-def test_write_heartbeat_creates_file(tmp_path, monkeypatch):
-    """write_heartbeat 应写入 state/signal_runner.heartbeat"""
-    # 改 state_dir 到 tmp
+def test_write_heartbeat_creates_file(tmp_path):
+    """write_heartbeat 应写入指定 state_dir (默认生产路径, 测试必须传 tmp)
+
+    v1.9+ (2026-08-01 修复): _write_heartbeat 接受 state_dir 参数, 默认 None
+    走生产路径. 测试必须传 tmp_path 避免污染 okx/state/signal_runner.heartbeat.
+    修复前此测试会覆盖生产 heartbeat (liveness_probe 误报 STALE).
+    """
     fake_state_dir = tmp_path / "state"
     fake_state_dir.mkdir()
-    monkeypatch.setattr(sr, "Path", lambda p: Path(p))
 
     result = {
         "timeframe": "15m",
@@ -205,10 +208,9 @@ def test_write_heartbeat_creates_file(tmp_path, monkeypatch):
         "runner_result": {"signal_triggered": False},
         "errors": [],
     }
-    # 直接调用，写到 workspace 真实 state 目录（不影响 tmp_path，因为 monkeypatch 影响范围）
-    sr._write_heartbeat(result)
+    sr._write_heartbeat(result, state_dir=fake_state_dir)
 
-    heartbeat_path = Path("/home/zzzx47/.openclaw/workspace/okx/state/signal_runner.heartbeat")
+    heartbeat_path = fake_state_dir / "signal_runner.heartbeat"
     assert heartbeat_path.exists()
 
     import json

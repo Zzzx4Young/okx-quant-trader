@@ -321,9 +321,16 @@ def run_at_next_bar(
     return result
 
 
-def _write_heartbeat(result: Dict[str, Any]) -> None:
-    """写本地 heartbeat 文件（供 watchdog 检查新鲜度）"""
-    state_dir = Path(__file__).resolve().parent.parent / "state"
+def _write_heartbeat(result: Dict[str, Any], state_dir: Optional[Path] = None) -> None:
+    """写本地 heartbeat 文件（供 watchdog 检查新鲜度）
+
+    :param result: 包含 timeframe/boundary/warmup_duration_s/runner_result/errors 的 dict
+    :param state_dir: 心跳文件目录。None = 用生产默认 (Path(__file__).parent.parent/state).
+                     测试必须传 tmp_path 避免污染生产 state (2026-08-01 P0 教训).
+    """
+    if state_dir is None:
+        state_dir = Path(__file__).resolve().parent.parent / "state"
+    state_dir = Path(state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
     heartbeat_path = state_dir / "signal_runner.heartbeat"
 
