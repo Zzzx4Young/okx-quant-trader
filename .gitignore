@@ -34,6 +34,10 @@ state/*
 !state/config.json
 !state/.gitkeep
 
+# ─── 运行时数据库（v1.4+ Dashboard history; backend writes on every
+# cron/health-check, schema 在 web/backend/db.py 的 init code）──
+*.sqlite
+
 # ─── 日志（按需保留 .gitkeep） ───────────────────────
 logs/*.log
 logs/*.csv
