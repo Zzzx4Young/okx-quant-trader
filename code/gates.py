@@ -131,7 +131,7 @@ def _run_regime_filter_subgate() -> Optional[Dict[str, Any]]:
         ret_str = f"{ret:+.1f}%" if ret is not None else "N/A"
         ratio_str = f"{ratio:.3f}" if ratio is not None else "N/A"
 
-        if regime_strategy is None:
+        if not regime_strategy:
             logger.info(
                 f"🚦 regime_filter 拒入场: {regime_reason} | "
                 f"ret={ret_str}, EMA ratio={ratio_str}"
@@ -197,7 +197,9 @@ def run_pre_signal_gates() -> Dict[str, Any]:
         regime = _run_regime_filter_subgate()
         if regime is not None:
             result["regime"] = regime
-            if regime["strategy"] is None:
+            # v1.9.0 Plan B: recommended_strategy() 返 list[str], 空 list [] 表示拒入场
+            # 旧 `is None` 对 [] 永远 False → 错误放行 (UP gate 放行).
+            if not regime["strategy"]:
                 result["passed"] = False
                 result["stage"] = "regime_skipped"
                 result["reason"] = f"regime_filter: {regime['reason']}"

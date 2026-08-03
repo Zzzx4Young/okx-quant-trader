@@ -250,6 +250,44 @@ def test_regime_filter_blocks_on_reject():
     assert result["circuit_breaker"]["level"] == "ok"
 
 
+def test_regime_filter_blocks_on_empty_list_v1_9_0():
+    """v1.9.0 Plan B drift fix: regime_strategy = [] (空 list) → passed=False。
+
+    Plan B mini-refactor 后, recommended_strategy() 返 list[str] (不再是 Optional[str]).
+    OLD code `if regime_strategy is None:` 对 [] 永远 False → 错误放行 (UP gate 放行).
+    本测试是 RED gate: 抓 gates.py:115 的 is None drift.
+    """
+    cb_dec, cb_state = _cb_decision(level="ok", skip=False)
+    # v1.9.0 API: UP regime → [] + "UP+EMA多头 拒入场"
+    regime_tuple = _regime([], reason="UP+EMA多头 拒入场", ret_90d_pct=15.0, ema_ratio=1.05)
+
+    with patch("okx.scripts.circuit_breaker.read_current_equity", return_value=10000.0), \
+         patch("okx.code.portfolio.Portfolio") as MockPortfolio, \
+         patch("okx.scripts.circuit_breaker.compute_consecutive_losses", return_value=0), \
+         patch("okx.scripts.circuit_breaker.check", return_value=(cb_dec, cb_state)), \
+         patch("okx.scripts.circuit_breaker.save_state"), \
+         patch("okx.code.backtest.data_loader.load") as mock_load, \
+         patch("okx.code.regime_filter.recommended_strategy", return_value=regime_tuple):
+        MockPortfolio.return_value._data = {"closed_positions": []}
+        mock_load.return_value.klines = MagicMock()
+
+        from okx.code.gates import run_pre_signal_gates
+        result = run_pre_signal_gates()
+
+    assert result["passed"] is False, (
+        f"UP regime ([]) 应被 gate 拒入场 (passed=False), got passed={result['passed']}"
+    )
+    assert result["stage"] == "regime_skipped", (
+        f"stage 应为 regime_skipped, got {result['stage']}"
+    )
+    assert "regime_filter" in result["reason"]
+    assert result["regime"]["strategy"] == [], (
+        f"regime.strategy 应为 [] (v1.9.0 API), got {result['regime']['strategy']}"
+    )
+    # CB 通过但被 regime 拦 (空 list 在 v1.9.0 后等同 None 语义)
+    assert result["circuit_breaker"]["level"] == "ok"
+
+
 def test_regime_filter_exception_fails_open():
     """load_klines 抛异常 → regime 闸 fail-open → passed=True（CB 已通过即可入）"""
     cb_dec, cb_state = _cb_decision(level="ok", skip=False)
