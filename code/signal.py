@@ -81,6 +81,16 @@ class SignalEngine:
         self._market = market_api
         self._config = config or get_config()
 
+    # ──────────────────────────────────────────────────────────────
+    # Plan B · Strategy Registry (替代硬编码 if-else dispatch)
+    # 加新策略 = 加 1 行 registry，无需改 check_all_symbols
+    # ──────────────────────────────────────────────────────────────
+    STRATEGY_REGISTRY: Dict[str, str] = {
+        "A": "check_ema20_signal",
+        "C": "check_volatility_breakout_signal",
+        "E": "check_veb_signal",
+    }
+
     # ---- EMA20 策略 ----
 
     def check_ema20_signal(
@@ -591,28 +601,16 @@ class SignalEngine:
 
             direction = pos_map.get(inst_id) or pos_map.get(symbol)
 
-            # 策略 A（趋势跟踪）
-            signal = self.check_ema20_signal(inst_id, direction)
-            if signal:
-                signals.append(signal)
-                continue
-
-            # 策略 B（震荡市反转）
-            signal = self.check_bb_rsi_signal(inst_id, direction)
-            if signal:
-                signals.append(signal)
-                continue
-
-            # 策略 C（波动率盘整后突破）
-            signal = self.check_volatility_breakout_signal(inst_id, direction)
-            if signal:
-                signals.append(signal)
-                continue
-
-            # 策略 D（资金费率极端反转）
-            signal = self.check_funding_rate_signal(inst_id, direction)
-            if signal:
-                signals.append(signal)
+            # Plan B · 策略注册表 dispatch (替代硬编码 if-else 链)
+            # 加新策略 = 加 1 行 STRATEGY_REGISTRY，无需改此处
+            for _letter, method_name in self.STRATEGY_REGISTRY.items():
+                method = getattr(self, method_name, None)
+                if method is None:
+                    continue  # 防御：未来策略 method 暂未实现
+                signal = method(inst_id, direction)
+                if signal:
+                    signals.append(signal)
+                    break  # 单 symbol 单策略（同 symbol 同时间只有一个 strategy 在跑）
 
         return signals
 
@@ -846,3 +844,25 @@ class SignalEngine:
             reason=reason,
             kline_time=kline_time,
         )
+
+    # ──────────────────────────────────────────────────────────────
+    # Plan B · 策略 E (VEB · VOLATILITY_EXPANSION_BREAKOUT) stub
+    # ──────────────────────────────────────────────────────────────
+    def check_veb_signal(
+        self,
+        symbol: str,
+        current_position_direction: Optional[str] = None,
+    ) -> Optional[Signal]:
+        """策略 E · VEB · 形态: BBW 压缩 + 扩张突破 + funding sanity + 量能共振."""
+        if not self._config.get("strategy_e.enabled", False):
+            return None
+        funding_rate = self._get_funding_rate(symbol)
+        funding_cap = self._config.get("strategy_e.funding_rate_cap", 0.0001)
+        if funding_rate > funding_cap:
+            return None
+        return None  # stub
+
+    def _get_funding_rate(self, symbol: str) -> float:
+        """获取最新 funding rate (stub - TODO: 接 OKX public API)."""
+        return 0.0
+

@@ -595,6 +595,7 @@ class RiskCalculator:
         "BB_RSI_REVERSION": "mean_reversion",   # B：左侧反转
         "VOLATILITY_BREAKOUT": "volatility",    # C：波动率爆发（独立）
         "FUNDING_RATE_REVERSAL": "funding",     # D：资金费率（独立）
+        "E_VOLATILITY_EXPANSION_BREAKOUT": "volatility",  # E：VEB（与 C 同阵营，独立判定）
     }
 
     # 默认阈值（可被 Config 覆盖）

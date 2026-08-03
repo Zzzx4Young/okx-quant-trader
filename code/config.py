@@ -289,6 +289,50 @@ class Config:
             return self.leverage_matrix_eth
         return self.leverage_matrix_altcoin
 
+    # ---- Plan B · Strategy params (data-driven access) ----
+
+    def strategy_params(self, name: str) -> dict:
+        """读取 strategy_<name>.* 配置子集 (Plan B mini-refactor)。
+
+        Plan B 之前: 每策略 ~7 个 @property (strategy_a_ema_period 等).
+        Plan B 后: 加新策略 = 加 state/config.json block，无需加 getter。
+
+        兼容两种 state/config.json 布局:
+          1. 嵌套 dict (现有 layout): "strategy_a": {"enabled": true, ...}
+          2. flat keys (legacy):     "strategy_a.enabled": true, ...
+
+        :param name: strategy letter, e.g. 'a' / 'c' / 'e'
+        :return: dict. 空 dict 表示该策略未配置.
+        """
+        # Layout 1: nested dict (state/config.json 现有格式)
+        nested = self._data.get(f"strategy_{name}", None)
+        if isinstance(nested, dict):
+            return dict(nested)  # 拷贝避免外部修改
+        # Layout 2: flat keys (向后兼容)
+        prefix = f"strategy_{name}."
+        return {
+            k.removeprefix(prefix): v
+            for k, v in self._data.items()
+            if k.startswith(prefix)
+        }
+
+    @property
+    def regime_strategy_map(self) -> dict:
+        """regime → [strategy_letter] 映射 (v1.9.0 Plan B)。
+
+        默认:
+          - DOWN → ["A"]      (A 已实证 +23.71% median)
+          - UP   → []         (UP 实证亏损，拒入场)
+          - SIDE → ["E"]      (E 在 SIDE 填补空白)
+
+        可在 state/config.json 覆盖 (未来加 UP 策略 F 时改这里，不改 code).
+        """
+        return self.get("regime_strategy_map", {
+            "DOWN": ["A"],
+            "UP": [],
+            "SIDE": ["E"],
+        })
+
     # ---- 黑名单 / 流动性过滤 (Constitution §4) ----
 
     @property

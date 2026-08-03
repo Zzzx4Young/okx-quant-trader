@@ -106,52 +106,72 @@ def recommended_strategy(
     up_ret_threshold: float = DEFAULT_UP_RET_THRESHOLD,
     down_ret_threshold: float = DEFAULT_DOWN_RET_THRESHOLD,
     ema_bullish_ratio: float = DEFAULT_EMA_BULLISH_RATIO,
-) -> Tuple[Optional[str], str, dict]:
-    """判定当前 BTC regime 推荐哪个策略。
+    regime_strategy_map: Optional[dict] = None,
+) -> Tuple[list, str, dict]:
+    """判定当前 BTC regime 推荐哪些策略。
 
     :param btc_klines: BTC K-lines (DataFrame with 'timestamp' (ms) + 'close' columns)
     :param up_ret_threshold: 90d return > this = UP 拒入场
     :param down_ret_threshold: 90d ret < this = DOWN 首选 A
     :param ema_bullish_ratio: EMA50/EMA200 > this = 多头确认
-    :return: (strategy_letter or None, reason, features dict)
-        - strategy_letter: 'A' / 'B' / 'C' / 'D' / None
+    :param regime_strategy_map: 可选, regime → [strategy_letter] 映射. None = 读 Config.
+    :return: (strategies, reason, features dict)
+        - strategies: list[str] of strategy letters. Empty = 拒入场.
         - reason: 人类可读的判定理由
         - features: 计算过程的中间值，便于 debug 和 dashboard 展示
 
-    决策矩阵：
-        强 UP   (ret > up_th AND ema_ratio > bullish_ratio)   → None + "UP..."
-        强 DOWN (ret < down_th AND ema_ratio < 1.0)           → "A" + "DOWN..."
-        其他                                                  → None + "SIDE 待人工评估..."
+    决策矩阵 (v1.9.0 Plan B · multi-strategy):
+        强 UP   (ret > up_th AND ema_ratio > bullish_ratio)   → [] + "UP..."
+        强 DOWN (ret < down_th AND ema_ratio < 1.0)           → ["A"] + "DOWN..."
+        其他 (SIDE)                                            → mapping["SIDE"] (默认 ["E"])
+
+    v1.8.x 旧 API (返回 Optional[str]) 已废弃 - 见 strategies.md §0.
     """
     daily_close = resample_to_daily(btc_klines)
     feats = _compute_features(daily_close)
 
     if feats["ret_90d_pct"] is None or feats["ema_ratio"] is None:
-        return None, f"数据不足 (bars={feats['bars']}, ret={feats['ret_90d_pct']}, ema_ratio={feats['ema_ratio']})", feats
+        return [], f"数据不足 (bars={feats['bars']}, ret={feats['ret_90d_pct']}, ema_ratio={feats['ema_ratio']})", feats
 
     ret_90d = feats["ret_90d_pct"]
     ema_ratio = feats["ema_ratio"]
 
-    # 强 UP：90d ret 高 AND EMA50 在 EMA200 上方 → 拒入场
+    # 分类 regime
     if ret_90d > up_ret_threshold and ema_ratio > ema_bullish_ratio:
-        return None, (
+        regime = "UP"
+        reason_detail = (
             f"UP+EMA多头 拒入场 (90d_ret={ret_90d:+.1f}% > {up_ret_threshold}%, "
             f"EMA50/EMA200={ema_ratio:.3f} > {ema_bullish_ratio})"
-        ), feats
-
-    # 强 DOWN：90d ret 低 AND EMA50 在 EMA200 下方 → 首选 A
-    if ret_90d < down_ret_threshold and ema_ratio < 1.0:
-        return "A", (
+        )
+    elif ret_90d < down_ret_threshold and ema_ratio < 1.0:
+        regime = "DOWN"
+        reason_detail = (
             f"DOWN+EMA空头 首选 A (90d_ret={ret_90d:+.1f}% < {down_ret_threshold}%, "
             f"EMA50/EMA200={ema_ratio:.3f} < 1.0)"
-        ), feats
+        )
+    else:
+        regime = "SIDE"
+        reason_detail = (
+            f"SIDE (90d_ret={ret_90d:+.1f}%, EMA50/EMA200={ema_ratio:.3f}, "
+            f"阈值: UP>{up_ret_threshold}%/EMA>{ema_bullish_ratio}, "
+            f"DOWN<{down_ret_threshold}%/EMA<1.0)"
+        )
 
-    # SIDE 或混合信号 → 待人工评估
-    return None, (
-        f"SIDE 待人工评估 (90d_ret={ret_90d:+.1f}%, "
-        f"EMA50/EMA200={ema_ratio:.3f}, 阈值: UP>{up_ret_threshold}%/EMA>{ema_bullish_ratio}, "
-        f"DOWN<{down_ret_threshold}%/EMA<1.0)"
-    ), feats
+    # 读 mapping (regime → strategies)
+    if regime_strategy_map is None:
+        try:
+            from okx.code.config import get_config
+            mapping = get_config().regime_strategy_map
+        except Exception:
+            # Fallback (避免循环依赖): 默认 mapping
+            mapping = {"DOWN": ["A"], "UP": [], "SIDE": ["E"]}
+    else:
+        mapping = regime_strategy_map
+
+    strategies = list(mapping.get(regime, []))
+    reason = f"{reason_detail} → {regime} 推荐 {strategies}"
+
+    return strategies, reason, feats
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -248,21 +268,22 @@ def tag_trades_by_regime(
         try:
             btc = load_klines(symbol, bar, end_ts=end_ts_ms)
             strat, _reason, _feats = recommended_strategy(btc.klines)
-            if strat == "A":
+            # v1.9.0 Plan B: strat 现在是 list[str] (可能包含 "A" / "E" / [])
+            if "A" in strat:
                 win_end_ts.at[i, "_regime"] = "A"
-            elif strat is None:
+            else:
+                # 用 feats 判定 UP vs SIDE (不依赖 strat 形态)
                 ret_90d = _feats.get("ret_90d_pct")
                 ema_ratio = _feats.get("ema_ratio")
-                if (
-                    ret_90d is not None and ema_ratio is not None
-                    and ret_90d > DEFAULT_UP_RET_THRESHOLD
+                if ret_90d is None or ema_ratio is None:
+                    win_end_ts.at[i, "_regime"] = "UNKNOWN"
+                elif (
+                    ret_90d > DEFAULT_UP_RET_THRESHOLD
                     and ema_ratio > DEFAULT_EMA_BULLISH_RATIO
                 ):
                     win_end_ts.at[i, "_regime"] = "UP"
                 else:
                     win_end_ts.at[i, "_regime"] = "SIDE"
-            else:
-                win_end_ts.at[i, "_regime"] = "UNKNOWN"
         except Exception:
             win_end_ts.at[i, "_regime"] = "UNKNOWN"
 
