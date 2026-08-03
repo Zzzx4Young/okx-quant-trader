@@ -68,6 +68,13 @@ if [[ $# -ge 1 ]] && [[ " $CLI_ACTIONS " == *" $1 "* ]]; then
     exec python3 -m okx.code.cli "$@"
 fi
 
+# L4 Shadow Runner · 集成动作（v1.9.0 · 2026-08-03）
+# 调用方式：./run.sh shadow
+# 注意: 不能在 CLI_ACTIONS 里加 shadow，否则会被上面 exec cli 抢走
+if [[ $# -ge 1 && "$1" == "shadow" ]]; then
+    exec python3 okx/scripts/run_live_shadow.py
+fi
+
 # 相对路径快捷方式：scripts/ tests/ docs/agent-context/ → 自动加 okx/ 前缀
 if [[ $# -ge 1 && "$1" =~ ^(scripts|tests|docs/agent-context)/ ]]; then
     set -- "okx/$@"

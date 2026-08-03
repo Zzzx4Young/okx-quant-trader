@@ -14,20 +14,52 @@ OKX 交易工作流执行器 (Runner)
 
 import time
 import os
+import json
 import logging
 from collections import deque
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import get_config
 from .client import OKXClient
 from .portfolio import Portfolio
 from .logger import TradeLogger
+from .signal import Signal
 from .risk import RiskCalculator
 from .signal import SignalEngine, Signal
 from .notifier import TelegramNotifier, NoopNotifier
 
 logger = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────────────────────────────
+# L4 Shadow Runner · Live signal logging (2026-08-03)
+# ──────────────────────────────────────────────────────────────
+
+# state/ 目录默认与 Portfolio 同路径。可被 monkeypatch 在测试中覆盖。
+# 注意: LIVE_SIGNALS_LOG 必须动态计算（monkeypatch STATE_DIR 才生效）
+STATE_DIR = Path("state")
+
+
+def _log_signal(signal: Signal) -> None:
+    """Append signal 到 state/live_signals.jsonl (atomic append)。
+
+    用于 L4 Shadow Runner 的 "actual signal" 来源。
+    JSONL 格式 (1 signal per line) · POSIX O_APPEND 原子保证。
+
+    cold-start 友好：目录不存在会自动创建（避免 fail-open）。
+    """
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        # 动态计算 log_path：让 monkeypatch STATE_DIR 在测试中生效
+        log_path = STATE_DIR / "live_signals.jsonl"
+        line = json.dumps(signal.to_dict(), ensure_ascii=False) + "\n"
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception as e:
+        # fail-soft: 不阻塞 live runner（信号 logging 是 observability，不是 critical path）
+        logger.warning(f"⚠️ _log_signal 失败 (non-critical): {e}")
 
 
 class Runner:
@@ -153,6 +185,9 @@ class Runner:
 
         # ── 4. 处理每个信号 ──
         for signal in signals:
+            # L4 Shadow Runner: 记录每个信号到 live_signals.jsonl（供 shadow 读 actual）
+            _log_signal(signal)
+
             action = self._process_signal(signal)
             results["actions"].append(action)
 
