@@ -9,7 +9,8 @@ OKX 交易风控计算器
 - 盈亏比校验
 """
 
-from typing import Any, Dict, NamedTuple, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from .config import get_config
 
@@ -740,3 +741,274 @@ class RiskCalculator:
         """
         fee_rate = 0.00055 if taker else 0.00030  # OKX Taker 0.055% / Maker 0.030%
         return round(price * size * ct_val * fee_rate, 4)
+
+
+# ──────────────────────────────────────────────────────────────
+# Portfolio Risk Aggregator (v1.9.0 · 2026-08-03 · P0)
+# ──────────────────────────────────────────────────────────────
+#
+# 设计意图：
+#   runner 决策路径当前只看仓位数 (max_concurrent_positions)，
+#   但 manual + system 仓的总敞口 / 杠杆 / 方向 / 集中度全无视图。
+#   aggregate_exposure 聚合所有仓 → PortfolioRisk，
+#   让 runner 能基于 total book 做 risk gates（不是只看 count）。
+#
+# 关键不变量：
+#   - manual + system 一视同仁（LEARN/Freqtrade 共识）
+#   - size=0 的仓（已平但 portfolio 未清理）跳过 notional 计算
+#   - size=0 的仓仍计入 position_count（反映 portfolio 实际记录数）
+
+@dataclass
+class PortfolioRisk:
+    """聚合持仓风险指标（包含 manual + system 仓）。"""
+    position_count: int = 0
+    total_notional_usdt: float = 0.0
+    long_notional_usdt: float = 0.0
+    short_notional_usdt: float = 0.0
+    net_direction_usdt: float = 0.0       # long - short（正=净多，负=净空）
+    gross_exposure_usdt: float = 0.0       # long + short（总敞口，不抵消）
+    leverage_max: int = 0
+    leverage_avg: float = 0.0
+    symbol_concentration: Dict[str, float] = field(default_factory=dict)  # symbol → notional
+    has_manual_position: bool = False
+    has_system_position: bool = False
+    manual_notional_usdt: float = 0.0
+    system_notional_usdt: float = 0.0
+
+
+def aggregate_exposure(positions: List[Dict[str, Any]]) -> PortfolioRisk:
+    """聚合所有持仓 → PortfolioRisk（manual + system 一视同仁）。
+
+    Args:
+        positions: list of position dicts（兼容 state/portfolio.json::positions 格式）
+            必需字段：size, entry_price, direction, symbol, leverage, strategy
+
+    Returns:
+        PortfolioRisk 包含 12 个风险维度
+
+    Notes:
+        - size=0 的仓跳过 notional 计算（已平仓）· 但仍计入 position_count
+        - manual 判定：strategy.startswith(("EXTERNAL", "MANUAL"))
+        - leverage_avg = 所有 size>0 仓的 leverage 均值
+    """
+    risk = PortfolioRisk(position_count=len(positions))
+
+    valid = [p for p in positions if p.get("size", 0) > 0]
+    if not valid:
+        return risk
+
+    total_leverage = 0
+    for p in valid:
+        size = p.get("size", 0)
+        entry = p.get("entry_price", 0)
+        notional = size * entry
+        direction = p.get("direction", "")
+        symbol = p.get("symbol", "")
+        leverage = p.get("leverage", 0)
+        strategy = p.get("strategy", "")
+
+        risk.total_notional_usdt += notional
+        if direction == "long":
+            risk.long_notional_usdt += notional
+        elif direction == "short":
+            risk.short_notional_usdt += notional
+
+        # Symbol concentration
+        risk.symbol_concentration[symbol] = (
+            risk.symbol_concentration.get(symbol, 0.0) + notional
+        )
+
+        # Leverage tracking
+        if leverage > risk.leverage_max:
+            risk.leverage_max = leverage
+        total_leverage += leverage
+
+        # Manual vs system classification
+        is_manual = strategy.startswith(("EXTERNAL", "MANUAL"))
+        if is_manual:
+            risk.has_manual_position = True
+            risk.manual_notional_usdt += notional
+        else:
+            risk.has_system_position = True
+            risk.system_notional_usdt += notional
+
+    # Derived metrics
+    risk.net_direction_usdt = risk.long_notional_usdt - risk.short_notional_usdt
+    risk.gross_exposure_usdt = risk.long_notional_usdt + risk.short_notional_usdt
+    risk.leverage_avg = total_leverage / len(valid)
+
+    return risk
+
+
+# ──────────────────────────────────────────────────────────────
+# Risk Gate Checker (v1.9.0 · 2026-08-03 · P1.2)
+# ──────────────────────────────────────────────────────────────
+#
+# 5 个 portfolio-level risk gates · runner.run() 在开仓前调用。
+# 设计目标：
+#   - 基于 aggregate_exposure + equity + config 阈值
+#   - 任意 gate fail → 拒入场 + 详细 reason
+#   - manual + system 一视同仁（不计 source）
+#
+# Gates:
+#   1. max_total_notional_usdt: total portfolio notional 上限
+#   2. max_net_directional_bias_pct: |net_direction| / equity 上限 (方向中性约束)
+#   3. max_single_position_pct: max position notional / equity 上限 (集中度约束)
+#   4. max_leverage: per-position leverage 上限 (杠杆约束)
+#   5. max_system_positions_after_manual: manual 满后 system 还能开 N 仓
+
+@dataclass
+class RiskGateConfig:
+    """5 个 gate 阈值配置（默认保守，可被 state/config.json 覆盖）。"""
+    max_total_notional_usdt: float = 200000.0          # 200K USDT
+    max_net_directional_bias_pct: float = 0.5            # 50% net bias
+    max_single_position_pct: float = 0.5                # 50% 单仓占比
+    max_leverage: int = 10                                # 10x hard cap
+    max_system_positions_after_manual: int = 1           # manual 满后 system 还能开 1
+    max_concurrent_positions: int = 3                    # total 仓位硬上限（保留原 config）
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RiskGateConfig":
+        """从 state/config.json['risk_gates'] 读取（向后兼容 fallback 默认值）。"""
+        if not d:
+            return cls()
+        return cls(
+            max_total_notional_usdt=float(d.get("max_total_notional_usdt", 200000.0)),
+            max_net_directional_bias_pct=float(d.get("max_net_directional_bias_pct", 0.5)),
+            max_single_position_pct=float(d.get("max_single_position_pct", 0.5)),
+            max_leverage=int(d.get("max_leverage", 10)),
+            max_system_positions_after_manual=int(d.get("max_system_positions_after_manual", 1)),
+            max_concurrent_positions=int(d.get("max_concurrent_positions", 3)),
+        )
+
+
+@dataclass
+class RiskGateResult:
+    """RiskGateChecker.check_all_gates 返回值。"""
+    passed: bool
+    failed_gates: list = field(default_factory=list)
+    reasons: list = field(default_factory=list)
+    total_notional_usdt: float = 0.0
+    net_direction_usdt: float = 0.0
+    net_bias_pct: float = 0.0
+    max_single_position_pct: float = 0.0
+    leverage_max: int = 0
+    system_position_count: int = 0
+    manual_position_count: int = 0
+    system_position_capacity_remaining: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "passed": self.passed,
+            "failed_gates": list(self.failed_gates),
+            "reasons": list(self.reasons),
+            "total_notional_usdt": self.total_notional_usdt,
+            "net_direction_usdt": self.net_direction_usdt,
+            "net_bias_pct": self.net_bias_pct,
+            "max_single_position_pct": self.max_single_position_pct,
+            "leverage_max": self.leverage_max,
+            "system_position_count": self.system_position_count,
+            "manual_position_count": self.manual_position_count,
+            "system_position_capacity_remaining": self.system_position_capacity_remaining,
+        }
+
+
+class RiskGateChecker:
+    """5 个 portfolio-level risk gates 检查。"""
+
+    @staticmethod
+    def check_all_gates(
+        positions: list,
+        equity: float,
+        cfg: RiskGateConfig,
+    ) -> RiskGateResult:
+        """检查所有 5 个 gates → 返回 RiskGateResult。
+
+        Args:
+            positions: list of position dicts（兼容 portfolio.json 格式）
+            equity: 当前账户净值 USDT（用于 bias / concentration 计算）
+            cfg: RiskGateConfig 阈值
+
+        Returns:
+            RiskGateResult（passed=True 时 failed_gates=[]，否则列出所有 fail 的 gate）
+
+        Notes:
+            - 任意 gate fail → passed=False（短路 OR，不是 AND）
+            - 多个 gate 同时 fail → 全部列出（不短路），方便 debug
+        """
+        risk = aggregate_exposure(positions)
+
+        # Count system vs manual
+        system_count = 0
+        manual_count = 0
+        for p in positions:
+            strat = p.get("strategy", "")
+            if strat.startswith(("EXTERNAL", "MANUAL")):
+                manual_count += 1
+            else:
+                system_count += 1
+
+        # 计算 bias / concentration（如果 equity > 0）
+        bias_pct = 0.0
+        max_pos_pct = 0.0
+        if equity > 0:
+            bias_pct = abs(risk.net_direction_usdt) / equity
+            if risk.symbol_concentration:
+                max_pos_pct = max(risk.symbol_concentration.values()) / equity
+
+        # capacity
+        capacity_remaining = max(0, cfg.max_system_positions_after_manual - system_count)
+
+        result = RiskGateResult(
+            passed=True,
+            total_notional_usdt=risk.total_notional_usdt,
+            net_direction_usdt=risk.net_direction_usdt,
+            net_bias_pct=bias_pct,
+            max_single_position_pct=max_pos_pct,
+            leverage_max=risk.leverage_max,
+            system_position_count=system_count,
+            manual_position_count=manual_count,
+            system_position_capacity_remaining=capacity_remaining,
+        )
+
+        # ── Gate 1: max_total_notional_usdt ──
+        if risk.total_notional_usdt > cfg.max_total_notional_usdt:
+            result.passed = False
+            result.failed_gates.append("max_total_notional_usdt")
+            result.reasons.append(
+                f"total_notional_usdt={risk.total_notional_usdt:.2f} > limit={cfg.max_total_notional_usdt:.2f}"
+            )
+
+        # ── Gate 2: max_net_directional_bias_pct ──
+        if equity > 0 and bias_pct > cfg.max_net_directional_bias_pct:
+            result.passed = False
+            result.failed_gates.append("max_net_directional_bias_pct")
+            result.reasons.append(
+                f"net_bias_pct={bias_pct:.2%} > limit={cfg.max_net_directional_bias_pct:.2%}"
+            )
+
+        # ── Gate 3: max_single_position_pct ──
+        if equity > 0 and max_pos_pct > cfg.max_single_position_pct:
+            result.passed = False
+            result.failed_gates.append("max_single_position_pct")
+            result.reasons.append(
+                f"max_single_position_pct={max_pos_pct:.2%} > limit={cfg.max_single_position_pct:.2%}"
+            )
+
+        # ── Gate 4: max_leverage ──
+        if risk.leverage_max > cfg.max_leverage:
+            result.passed = False
+            result.failed_gates.append("max_leverage")
+            result.reasons.append(
+                f"leverage_max={risk.leverage_max} > limit={cfg.max_leverage}"
+            )
+
+        # ── Gate 5: max_system_positions_after_manual ──
+        if system_count > cfg.max_system_positions_after_manual:
+            result.passed = False
+            result.failed_gates.append("max_system_positions_after_manual")
+            result.reasons.append(
+                f"system_position_count={system_count} > limit={cfg.max_system_positions_after_manual}"
+            )
+
+        return result

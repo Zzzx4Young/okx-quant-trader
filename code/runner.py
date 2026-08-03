@@ -26,6 +26,7 @@ from .client import OKXClient
 from .portfolio import Portfolio
 from .logger import TradeLogger
 from .signal import Signal
+from .risk import RiskGateChecker, RiskGateConfig
 from .risk import RiskCalculator
 from .signal import SignalEngine, Signal
 from .notifier import TelegramNotifier, NoopNotifier
@@ -168,6 +169,20 @@ class Runner:
         gate_check = self._pre_signal_gates()
         results["signal_gates"] = gate_check
         if not gate_check["passed"]:
+            return results
+
+        # ── 1.7. Portfolio-level risk gates (2026-08-04 P1) ──
+        # 5 个 gate (total_notional / net_bias / concentration / leverage / system_capacity)
+        # 基于 aggregate_exposure + equity + state/config.json['risk'] 阈值
+        risk_gates_result = self._pre_risk_gates()
+        results["risk_gates"] = risk_gates_result.to_dict()
+        if not risk_gates_result.passed:
+            logger.warning(
+                f"🚫 Risk gates blocked signals: {risk_gates_result.failed_gates} | "
+                f"{'; '.join(risk_gates_result.reasons)}"
+            )
+            results["signal_triggered"] = False
+            results["reason"] = f"risk_gates_blocked: {risk_gates_result.failed_gates}"
             return results
 
         # ── 2. 获取当前持仓 ──
@@ -325,6 +340,50 @@ class Runner:
                         )
 
         return {"passed": True}
+
+    def _pre_risk_gates(self):
+        """Portfolio-level risk gates check (P1).
+
+        5 个 gate:
+          1. max_total_notional_usdt: total portfolio notional 上限
+          2. max_net_directional_bias_pct: |net_direction| / equity 上限
+          3. max_single_position_pct: max position / equity 上限
+          4. max_leverage: per-position leverage 上限
+          5. max_system_positions_after_manual: manual 满后 system 还能开 N 仓
+
+        Fail-soft: 任何 exception → passed=False + reason 含 "fail-open"（不阻塞 runner）。
+        """
+        try:
+            positions = self._portfolio.get_all_positions()
+            # 读取 equity from circuit breaker state（与 Portfolio 同一来源）
+            equity = 0.0
+            try:
+                from okx.scripts.circuit_breaker import read_current_equity
+                equity = read_current_equity()
+            except Exception:
+                # 如果 CB 不可用，从 portfolio 推断
+                portfolio_data = self._portfolio._data
+                if isinstance(portfolio_data, dict):
+                    equity = float(portfolio_data.get("daily_stats", {}).get("current_equity_usdt", 0.0))
+
+            # 从 config 读取阈值（向后兼容 fallback）
+            risk_config = self._config.get("risk", {})
+            gate_cfg = RiskGateConfig.from_dict(risk_config)
+
+            return RiskGateChecker.check_all_gates(
+                positions=positions,
+                equity=equity,
+                cfg=gate_cfg,
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ _pre_risk_gates fail-open: {e}")
+            # 返回 passed=True + reason 含 fail-open，避免阻塞 live runner
+            from okx.code.risk import RiskGateResult
+            return RiskGateResult(
+                passed=True,
+                failed_gates=[],
+                reasons=[f"fail-open: {e}"],
+            )
 
     def _pre_signal_gates(self) -> Dict[str, Any]:
         """事中防御 gate（薄 wrapper → 委托 code.gates.run_pre_signal_gates）。

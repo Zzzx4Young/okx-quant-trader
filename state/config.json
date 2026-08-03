@@ -55,7 +55,12 @@
       1.0,
       1.5,
       2.5
-    ]
+    ],
+    "max_total_notional_usdt": 200000.0,
+    "max_net_directional_bias_pct": 0.5,
+    "max_single_position_pct": 0.5,
+    "max_leverage": 10,
+    "max_system_positions_after_manual": 1
   },
   "strategy_a": {
     "name": "EMA20_BREAKOUT",
