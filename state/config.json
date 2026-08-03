@@ -163,5 +163,28 @@
     "min_interval_sec": 1,
     "daily_summary_hour_utc": 15
   },
-  "source_experiment": ""
+  "source_experiment": "",
+  "strategy_e": {
+    "enabled": false,
+    "description": "VEB · BBW 压缩 + 扩张突破 + funding sanity + 量能共振",
+    "bb_period": 20,
+    "bb_std": 2.0,
+    "bbw_lookback": 100,
+    "bbw_squeeze_percentile": 0.2,
+    "bbw_expansion_ratio": 1.1,
+    "funding_rate_cap": 0.0001,
+    "volume_ratio": 1.5,
+    "rsi_overbought": 70,
+    "rsi_oversold": 30,
+    "atr_multiplier": 1.5
+  },
+  "regime_strategy_map": {
+    "DOWN": [
+      "A"
+    ],
+    "UP": [],
+    "SIDE": [
+      "E"
+    ]
+  }
 }
