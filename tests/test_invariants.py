@@ -308,6 +308,71 @@ class TestInvariantPositionSizePositive:
         assert not bad, f"clean portfolio 不应被误判为违反 invariant: {bad}"
 
 
+# ──────────── I-6: Strategy config schema 不变量 (parametrize over A/C/E) ────────────
+
+class TestStrategyConfigSchemaInvariant:
+    """Config.strategy_params(name) 必须为每个 strategy 返回合法 dict。
+
+    不变量：
+      - 返回类型必须是 dict
+      - dict 非空（每个 strategy 至少有 enabled 字段）
+      - 必含字段 enabled（bool-like）+ 至少一个数值参数
+    """
+
+    @pytest.mark.parametrize("strategy_letter", ["a", "c", "e"])
+    def test_strategy_params_returns_valid_dict(self, strategy_letter):
+        from okx.code.config import Config
+        cfg = Config()
+        params = cfg.strategy_params(strategy_letter)
+        assert isinstance(params, dict), (
+            f"strategy_{strategy_letter}.* 应返回 dict, got {type(params).__name__}"
+        )
+        assert params, (
+            f"strategy_{strategy_letter}.* 不应为空"
+        )
+        assert "enabled" in params, (
+            f"strategy_{strategy_letter}.* 必须含 'enabled' 字段"
+        )
+
+    @pytest.mark.parametrize("strategy_letter", ["a", "c", "e"])
+    def test_strategy_params_only_returns_matching_keys(self, strategy_letter):
+        """strategy_params 必须只返回 strategy_<letter> 子集的 keys (嵌套 dict 模式).
+
+        state/config.json 使用嵌套 dict: "strategy_e": {"enabled": ..., "bb_period": ...}.
+        strategy_params() 必须返回该嵌套 dict 的内容,跨 strategy 不能交叉污染。
+        """
+        from okx.code.config import Config
+        cfg = Config()
+        params = cfg.strategy_params(strategy_letter)
+        nested = cfg._data.get(f"strategy_{strategy_letter}", {})
+        assert isinstance(nested, dict), (
+            f"state/config.json 应含 strategy_{strategy_letter} 嵌套 dict"
+        )
+        assert set(params.keys()) == set(nested.keys()), (
+            f"strategy_params({strategy_letter!r}) 必须返回嵌套 dict 的 keys"
+        )
+
+    @pytest.mark.parametrize("strategy_letter", ["a", "c", "e"])
+    def test_strategy_params_no_cross_contamination(self, strategy_letter):
+        """不同 strategy 的 params 必须独立,不能交叉污染。
+
+        E 独有 funding_rate_cap / bbw_expansion_ratio 字段 (Plan B 新增)。
+        A/C 不应含这些 E-only 字段。
+        """
+        from okx.code.config import Config
+        cfg = Config()
+        params = cfg.strategy_params(strategy_letter)
+        e_only_keys = {"funding_rate_cap", "bbw_expansion_ratio", "bbw_squeeze_percentile"}
+        if strategy_letter == "e":
+            assert e_only_keys <= set(params.keys()), (
+                f"strategy_e 应含 E-only 字段 {e_only_keys}, got {set(params.keys())}"
+            )
+        else:
+            assert not (e_only_keys & set(params.keys())), (
+                f"strategy_{strategy_letter} 不应含 E-only 字段 {e_only_keys & set(params.keys())}"
+            )
+
+
 # ──────────── I-5: per-trade loss ≤ max_loss_pct (1%) ────────────
 
 class TestInvariantPerTradeLossWithinHardCap:

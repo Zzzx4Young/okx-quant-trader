@@ -18,6 +18,73 @@ from okx.code.risk import RiskCalculator
 
 
 # ─────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────
+# Plan B · 策略 E 注册与冲突集成
+# ─────────────────────────────────────────────────────────────
+
+class TestStrategyRegimeIncludesE:
+    """STRATEGY_REGIME 必须包含 E_VOLATILITY_EXPANSION_BREAKOUT。"""
+
+    def test_e_registered_in_risk_map(self):
+        """Constitution §3 冲突过滤需要 E 的 regime 标签。"""
+        assert "E_VOLATILITY_EXPANSION_BREAKOUT" in RiskCalculator.STRATEGY_REGIME, (
+            f"STRATEGY_REGIME 必须包含 E 标签, current: "
+            f"{list(RiskCalculator.STRATEGY_REGIME.keys())}"
+        )
+
+    def test_e_classified_as_volatility(self):
+        """E 与 C 同属 volatility 阵营（独立判定，不参与 A/B 冲突比较）。"""
+        regime = RiskCalculator.STRATEGY_REGIME.get(
+            "E_VOLATILITY_EXPANSION_BREAKOUT"
+        )
+        assert regime == "volatility", (
+            f"E 应归类为 volatility (与 C 同阵营), got {regime}"
+        )
+
+
+class TestEConflictIndependence:
+    """E 是 volatility 阵营 → 不参与 A↔B 反向冲突比较 (规则 1 边界)。"""
+
+    def test_e_does_not_conflict_with_a_direction(self):
+        """A 的 long signal + E 的 short signal 不应触发规则 1 拒绝。
+
+        原因：C/D/E 都是 volatility 阵营 → 独立判定 → Constitution §3 规则 1
+        只比较 trend_follow ↔ mean_reversion。
+        """
+        # Pre-condition：E 必须先注册为 volatility。否则 None regime 会被意外早退
+        # 而这个早退不等于"E 独立"——是 bug。
+        assert "E_VOLATILITY_EXPANSION_BREAKOUT" in RiskCalculator.STRATEGY_REGIME, (
+            "Test 前提：E 必须已注册才能验证独立性"
+        )
+        assert (
+            RiskCalculator.STRATEGY_REGIME["E_VOLATILITY_EXPANSION_BREAKOUT"]
+            == "volatility"
+        ), "E 必须归类为 volatility 才与 C 同阵营独立"
+
+        rc = RiskCalculator.__new__(RiskCalculator)
+        a_long = make_signal(
+            strategy="EMA20_BREAKOUT",
+            direction="long",
+            kline_time="2026-08-03T10:00:00Z",
+        )
+        e_short = make_signal(
+            strategy="E_VOLATILITY_EXPANSION_BREAKOUT",
+            direction="short",
+            kline_time="2026-08-03T10:01:00Z",
+        )
+        result = rc.check_strategy_conflict(
+            new_signal=e_short,
+            recent_signals=[a_long],
+            atr_ratio=None,
+        )
+        assert result is None, (
+            f"E (volatility) 与 A (trend_follow) 不应触发规则 1, "
+            f"got: {result}"
+        )
+
+
+
 # 测试用 Signal mock（避免循环 import signal.py）
 # ─────────────────────────────────────────────────────────────
 

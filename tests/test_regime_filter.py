@@ -245,59 +245,146 @@ class TestComputeFeatures:
 class TestRecommendedStrategy:
     def test_empty_returns_none(self):
         df = pd.DataFrame(columns=["timestamp", "close"])
-        strategy, reason, feats = recommended_strategy(df)
-        assert strategy is None
+        strategies, reason, feats = recommended_strategy(df)
+        assert strategies == []
         assert "数据不足" in reason
 
     def test_up_strong_returns_none(self):
         df = make_regime_klines("UP_STRONG")
-        strategy, reason, feats = recommended_strategy(df)
-        assert strategy is None
+        strategies, reason, feats = recommended_strategy(df)
+        assert strategies == []
         assert "UP+EMA多头" in reason
         assert feats["ret_90d_pct"] > DEFAULT_UP_RET_THRESHOLD
         assert feats["ema_ratio"] > DEFAULT_EMA_BULLISH_RATIO
 
     def test_down_strong_returns_a(self):
         df = make_regime_klines("DOWN_STRONG")
-        strategy, reason, feats = recommended_strategy(df)
-        assert strategy == "A"
+        strategies, reason, feats = recommended_strategy(df)
+        assert strategies == ["A"]
         assert "DOWN+EMA空头 首选 A" in reason
         assert feats["ret_90d_pct"] < DEFAULT_DOWN_RET_THRESHOLD
         assert feats["ema_ratio"] < 1.0
 
-    def test_side_returns_none(self):
+    def test_side_returns_e_in_default_mapping(self):
+        """SIDE 默认 mapping → ["E"] (Plan B 填补空白)."""
         df = make_regime_klines("SIDE")
-        strategy, reason, feats = recommended_strategy(df)
-        assert strategy is None
+        strategies, reason, feats = recommended_strategy(df)
+        assert strategies == ["E"]
         assert "SIDE" in reason
 
-    def test_flat_returns_none(self):
+    def test_flat_returns_e_in_default_mapping(self):
+        """FLAT_UP 落入 SIDE → 默认 mapping ["E"]."""
         df = make_regime_klines("FLAT_UP")
-        strategy, reason, feats = recommended_strategy(df)
-        assert strategy is None
-        # 0% ret + ratio ~1 → 边界 SIDE
+        strategies, reason, feats = recommended_strategy(df)
+        assert strategies == ["E"]
         assert "SIDE" in reason or "UP" in reason
 
-    def test_up_weak_returns_none(self):
-        """90d ret +8%（弱 UP < 10% 阈值）→ 落入 SIDE"""
+    def test_up_weak_returns_e_in_default_mapping(self):
+        """UP_WEAK 落入 SIDE → 默认 mapping ["E"]."""
         df = make_regime_klines("UP_WEAK")
-        strategy, reason, feats = recommended_strategy(df)
-        assert strategy is None
+        strategies, reason, feats = recommended_strategy(df)
+        assert strategies == ["E"]
 
-    def test_down_weak_returns_none(self):
-        """90d ret -3%（弱 DOWN > -5% 阈值）→ 落入 SIDE"""
+    def test_down_weak_returns_e_in_default_mapping(self):
+        """DOWN_WEAK 落入 SIDE → 默认 mapping ["E"]."""
         df = make_regime_klines("DOWN_WEAK")
-        strategy, reason, feats = recommended_strategy(df)
-        assert strategy is None
+        strategies, reason, feats = recommended_strategy(df)
+        assert strategies == ["E"]
+
+    # ──────────────────────────────────────────────────────────────
+# 新增 · multi-strategy return type (Plan B mini-refactor)
+# 推荐函数从 Optional[str] 改为 list[str] —— 多策略 candidate + 空 = 拒入场
+# ──────────────────────────────────────────────────────────────
+
+class TestRecommendedStrategyMultiStrategy:
+    """v1.9.0 · recommended_strategy 返回类型从 Optional[str] 改为 list[str]。"""
+
+    def test_return_type_is_list(self):
+        """返回类型必须是 list[str]，不再是 str 或 None。"""
+        df = make_regime_klines("DOWN_STRONG")
+        result = recommended_strategy(df)
+        assert isinstance(result, tuple) and len(result) == 3
+        strategies, reason, feats = result
+        assert isinstance(strategies, list), (
+            f"strategies 必须是 list, got {type(strategies).__name__}"
+        )
+        for s in strategies:
+            assert isinstance(s, str)
+
+    def test_down_strong_returns_list_containing_a(self):
+        """DOWN_STRONG → list 必须严格包含 'A' (list 长度 = 1)。"""
+        df = make_regime_klines("DOWN_STRONG")
+        strategies, reason, _ = recommended_strategy(df)
+        assert isinstance(strategies, list), f"必须返回 list, got {type(strategies).__name__}"
+        assert strategies == ["A"], f"DOWN_STRONG 应返回 ['A'], got {strategies}"
+        assert "DOWN+EMA空头" in reason
+
+    def test_side_returns_e_in_list(self):
+        """SIDE regime → 包含 "E"（填空白 · Plan B 核心改动）。"""
+        df = make_regime_klines("SIDE")
+        strategies, reason, _ = recommended_strategy(df)
+        assert "E" in strategies, (
+            f"SIDE regime 应推荐 E (VEB), got {strategies}"
+        )
+
+    def test_up_returns_empty_list(self):
+        """UP_STRONG → [] (拒入场)。"""
+        df = make_regime_klines("UP_STRONG")
+        strategies, reason, _ = recommended_strategy(df)
+        assert strategies == [], (
+            f"UP_STRONG 应返回空 list, got {strategies}"
+        )
+
+    def test_empty_data_returns_empty_list(self):
+        """数据不足时返回 [] (而非 None)。"""
+        df = pd.DataFrame(columns=["timestamp", "close"])
+        strategies, reason, feats = recommended_strategy(df)
+        assert strategies == []
+        assert "数据不足" in reason
+
+
+class TestRegimeStrategyMapConfig:
+    """regime_strategy_map 应在 state/config.json 中可配置 (而非硬编码)。"""
+
+    def test_default_down_to_a(self):
+        """默认 mapping: DOWN → [A]。"""
+        from okx.code.config import Config
+        cfg = Config()
+        m = cfg.regime_strategy_map
+        assert "A" in m.get("DOWN", [])
+
+    def test_default_side_to_e(self):
+        """默认 mapping: SIDE → [E] (Plan B 填补空白)。"""
+        from okx.code.config import Config
+        cfg = Config()
+        m = cfg.regime_strategy_map
+        assert "E" in m.get("SIDE", []), (
+            f"SIDE 应默认映射 E (VEB), got {m.get('SIDE', [])}"
+        )
+
+    def test_default_up_empty(self):
+        """默认 mapping: UP → [] (实证亏损)。"""
+        from okx.code.config import Config
+        cfg = Config()
+        m = cfg.regime_strategy_map
+        assert m.get("UP", []) == []
+
+
+# ──────────────────────────────────────────────────────────────
+# 原 Threshold Override 等测试继续在下方
+# ──────────────────────────────────────────────────────────────
 
     def test_threshold_override(self):
-        """手动提高 up_threshold 到 30% → UP_STRONG 不再拒"""
+        """手动提高 up_threshold 到 30% → UP_STRONG 不再拒。
+
+        v1.9.0 后：SIDE regime 默认 mapping 返回 ["E"] (Plan B 填补空白)。
+        """
         df = make_regime_klines("UP_STRONG")
-        strategy, reason, _ = recommended_strategy(
+        strategies, reason, _ = recommended_strategy(
             df, up_ret_threshold=30.0,
         )
-        # 25% < 30% → 不再触发 UP 拒绝 → 落入 SIDE 或其他
-        assert strategy is None
+        # 25% < 30% → 不再触发 UP 拒绝 → 落入 SIDE → 默认 mapping ["E"]
+        assert strategies == ["E"], f"UP+overridden 应落入 SIDE → ['E'], got {strategies}"
         assert "UP+EMA多头" not in reason
 
     def test_returns_features_dict(self):
@@ -328,18 +415,18 @@ class TestRegimePatternFromWalkforward:
     """
 
     @pytest.mark.parametrize("regime_mock,expected_strategy", [
-        ("UP_STRONG", None),       # 拒入场
-        ("DOWN_STRONG", "A"),      # 首选 A
-        ("SIDE", None),            # 人工
-        ("UP_WEAK", None),
-        ("DOWN_WEAK", None),
-        ("FLAT_UP", None),
-        ("FLAT_DOWN", None),
+        ("UP_STRONG", []),         # 拒入场 (v1.9.0 改 list[str])
+        ("DOWN_STRONG", ["A"]),    # 首选 A
+        ("SIDE", ["E"]),           # 人工 (SIDE 在 Plan B 后默认 ["E"] — VEB 自动启用)
+        ("UP_WEAK", ["E"]),        # 弱 UP 落入 SIDE
+        ("DOWN_WEAK", ["E"]),      # 弱 DOWN 落入 SIDE
+        ("FLAT_UP", ["E"]),        # 边界 SIDE
+        ("FLAT_DOWN", ["E"]),      # 边界 SIDE
     ])
     def test_walkforward_window_mapping(self, regime_mock, expected_strategy):
         df = make_regime_klines(regime_mock)
-        strategy, reason, _ = recommended_strategy(df)
-        assert strategy == expected_strategy, (
+        strategies, reason, _ = recommended_strategy(df)
+        assert strategies == expected_strategy, (
             f"regime={regime_mock} expected={expected_strategy} got={strategy}, reason={reason}"
         )
 
@@ -424,14 +511,11 @@ class TestTagTradesByRegime:
             result = tag_trades_by_regime(df)
         assert (result["_regime"] == "SIDE").all()
 
-    def test_data_insufficient_trades_tagged_side(self):
-        """empty klines (data insufficient) → 标 SIDE（不符合 docstring，应为 UNKNOWN）
+    def test_data_insufficient_trades_tagged_unknown(self):
+        """empty klines (data insufficient) → 标 UNKNOWN (修正 Plan B 与 docstring 偏差).
 
-        ⚠️ 已知 docstring vs code 不一致：
-          - docstring 行 18-24: 'UNKNOWN' = 数据不足
-          - code 行 254-258: ret_90d_pct=None 走 else 分支 → 标 SIDE!
-        本测试记录当前实现行为（不修 bug，避免越权）+ 等 Nixil 确认是否应该
-        把 ret_90d is None 路径重定向到 UNKNOWN。
+        v1.9.0 Plan B: ret_90d/ema_ratio is None → UNKNOWN (符合 docstring)
+        修前 (v1.8.x): ret_90d is None 走 else 分支误标 SIDE。
         """
         df = self._make_trades(2)
         with patch("okx.code.backtest.data_loader.load") as mock_load:
@@ -439,7 +523,7 @@ class TestTagTradesByRegime:
                 klines=pd.DataFrame(columns=["timestamp", "close"])
             )
             result = tag_trades_by_regime(df)
-        assert (result["_regime"] == "SIDE").all()  # 当前行为
+        assert (result["_regime"] == "UNKNOWN").all()
 
     def test_load_klines_exception_tagged_unknown(self):
         """load_klines 抛异常 → 全部 trades 标 UNKNOWN"""
@@ -449,20 +533,24 @@ class TestTagTradesByRegime:
             result = tag_trades_by_regime(df)
         assert (result["_regime"] == "UNKNOWN").all()
 
-    def test_other_strategy_letter_tagged_unknown(self):
-        """regime_filter 推荐 B/C（防御）→ 标 UNKNOWN"""
+    def test_other_strategy_letter_tagged_by_feats(self):
+        """v1.9.0 Plan B: 推荐非 A 策略 → 按 feats 分类 (不再硬标 UNKNOWN)。
+
+        推荐 ["B"] / ["C"] 等不参与 live dispatch 的策略时，
+        regime 标签应该反映实际市场状态（SIDE/UP/UNKNOWN），不是硬编码 UNKNOWN。
+        """
         df = self._make_trades(3)
-        # 同时 patch load + recommended_strategy：load 走 mocked klines，
-        # 但 recommended_strategy 直接返回 B（模拟未来扩展或异常路径）
         with patch("okx.code.backtest.data_loader.load") as mock_load, \
              patch("okx.code.regime_filter.recommended_strategy") as mock_rs:
             mock_load.return_value = Mock(klines=make_regime_klines("DOWN_STRONG"))
-            mock_rs.return_value = ("B", "BB_RSI_REVERSION", {
+            # v1.9.0 API: list[str] 而非 str
+            mock_rs.return_value = (["B"], "BB_RSI_REVERSION", {
                 "ret_90d_pct": -15.0, "ema_ratio": 0.87, "ema50": 65000.0,
                 "ema200": 75000.0, "last_price": 65000.0, "bars": 250,
             })
             result = tag_trades_by_regime(df)
-        assert (result["_regime"] == "UNKNOWN").all()
+        # feats: ret=-15 (<-5%) & ema=0.87 (<1.0) → DOWN-class → SIDE 标签
+        assert (result["_regime"] == "SIDE").all()
 
     def test_multiple_windows_shared_regime(self):
         """同一 window_id 共用 regime；不同 window_id 各自 dedup"""
