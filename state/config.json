@@ -14,10 +14,13 @@
     "max_concurrent_positions": 3,
     "emergency_stop": false,
     "demo_mode": true,
-    "live_first_week_btc_only": false
+    "live_first_week_btc_only": false,
+    "max_manual_positions": 5,
+    "max_system_positions": 5,
+    "max_total_positions": 10
   },
   "risk": {
-    "max_loss_percent_per_trade": 1.0,
+    "max_loss_percent_per_trade": 2.0,
     "min_reward_risk_ratio": 1.5,
     "daily_max_loss_trades": 3,
     "sl_buffer_percent": 0.5,
@@ -56,11 +59,14 @@
       1.5,
       2.5
     ],
-    "max_total_notional_usdt": 200000.0,
+    "max_total_notional_usdt": 20000.0,
     "max_net_directional_bias_pct": 0.5,
     "max_single_position_pct": 0.5,
     "max_leverage": 10,
-    "max_system_positions_after_manual": 1
+    "max_system_positions_after_manual": 1,
+    "fractional_kelly": 0.5,
+    "volatility_dampen_factor": 1.0,
+    "min_trades_for_kelly": 15
   },
   "strategy_a": {
     "name": "EMA20_BREAKOUT",
@@ -191,5 +197,10 @@
     "SIDE": [
       "E"
     ]
+  },
+  "regime": {
+    "up_threshold": 10.0,
+    "down_threshold": -5.0,
+    "ema_bullish_ratio": 1.02
   }
 }

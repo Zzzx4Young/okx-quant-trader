@@ -94,6 +94,21 @@ class Config:
         return self.get("trading.max_concurrent_positions", 3)
 
     @property
+    def max_manual_positions(self) -> int:
+        """8-04 Q1 redesign: manual 仓位独立 cap (避免 3 EXTERNAL_WEB_SYNC 永久 block)."""
+        return self.get("trading.max_manual_positions", 5)
+
+    @property
+    def max_system_positions(self) -> int:
+        """8-04 Q1 redesign: system 仓位独立 cap."""
+        return self.get("trading.max_system_positions", 5)
+
+    @property
+    def max_total_positions(self) -> int:
+        """8-04 Q1 redesign: total 仓位 safety cap (manual + system)."""
+        return self.get("trading.max_total_positions", 10)
+
+    @property
     def emergency_stop(self) -> bool:
         return self.get("trading.emergency_stop", False)
 
@@ -128,6 +143,38 @@ class Config:
     @property
     def time_stop_hours(self) -> int:
         return self.get("risk.time_stop_hours", 2)
+
+    # ---- Q5/Q6/Q11 silent drift fix (2026-08-05) ----
+    # 8-04 23:36+ apply 时漏 wire-up 到 Config @property:
+    #   - Q5: risk.fractional_kelly = 0.5 (决策值) vs 0.25 (旧 function default)
+    #   - Q6: risk.volatility_dampen_factor = 1.0 (决策值) vs 0.7 (旧 function default)
+    #   - Q11: regime.{up,down}_threshold + ema_bullish_ratio — 决策"维持"未 wire, JSON 缺字段
+    # runner.py:696-697 写 cfg.fractional_kelly/vola → AttributeError → try/except fallback
+    # 修复: 补 Config @property, default = 决策值 (Iron Rule #11 fail-safe to decision)
+    @property
+    def fractional_kelly(self) -> float:
+        """Q5 8-04 decision: 1/2 Kelly (0.5)."""
+        return self.get("risk.fractional_kelly", 0.5)
+
+    @property
+    def volatility_dampen_factor(self) -> float:
+        """Q6 8-04 decision: remove dampen (1.0)."""
+        return self.get("risk.volatility_dampen_factor", 1.0)
+
+    @property
+    def regime_up_threshold(self) -> float:
+        """Q11 8-04 decision: maintain UP ret threshold 10%."""
+        return self.get("regime.up_threshold", 10.0)
+
+    @property
+    def regime_down_threshold(self) -> float:
+        """Q11 8-04 decision: maintain DOWN ret threshold -5%."""
+        return self.get("regime.down_threshold", -5.0)
+
+    @property
+    def regime_ema_bullish_ratio(self) -> float:
+        """regime filter EMA50/EMA200 bullish ratio (UP 确认阈值)."""
+        return self.get("regime.ema_bullish_ratio", 1.02)
 
     # ---- Strategy A ----
 

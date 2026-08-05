@@ -103,17 +103,17 @@ def _compute_features(daily_close: pd.Series) -> dict:
 def recommended_strategy(
     btc_klines: pd.DataFrame,
     *,
-    up_ret_threshold: float = DEFAULT_UP_RET_THRESHOLD,
-    down_ret_threshold: float = DEFAULT_DOWN_RET_THRESHOLD,
-    ema_bullish_ratio: float = DEFAULT_EMA_BULLISH_RATIO,
+    up_ret_threshold: float = None,
+    down_ret_threshold: float = None,
+    ema_bullish_ratio: float = None,
     regime_strategy_map: Optional[dict] = None,
 ) -> Tuple[list, str, dict]:
     """判定当前 BTC regime 推荐哪些策略。
 
     :param btc_klines: BTC K-lines (DataFrame with 'timestamp' (ms) + 'close' columns)
-    :param up_ret_threshold: 90d return > this = UP 拒入场
-    :param down_ret_threshold: 90d ret < this = DOWN 首选 A
-    :param ema_bullish_ratio: EMA50/EMA200 > this = 多头确认
+    :param up_ret_threshold: 90d return > this = UP 拒入场 (None = 从 Config 读)
+    :param down_ret_threshold: 90d ret < this = DOWN 首选 A (None = 从 Config 读)
+    :param ema_bullish_ratio: EMA50/EMA200 > this = 多头确认 (None = 从 Config 读)
     :param regime_strategy_map: 可选, regime → [strategy_letter] 映射. None = 读 Config.
     :return: (strategies, reason, features dict)
         - strategies: list[str] of strategy letters. Empty = 拒入场.
@@ -126,7 +126,34 @@ def recommended_strategy(
         其他 (SIDE)                                            → mapping["SIDE"] (默认 ["E"])
 
     v1.8.x 旧 API (返回 Optional[str]) 已废弃 - 见 strategies.md §0.
+
+    Q11 silent drift fix (2026-08-05):
+      threshold 不传 → lazy load Config → fallback to module constants
+      (保留 module constants 作 fallback: 离线 / import 失败 / Config 未 init 时仍能跑)
     """
+    # Config wire-up: None → lazy load (防止循环 import)
+    if up_ret_threshold is None or down_ret_threshold is None or ema_bullish_ratio is None:
+        try:
+            from okx.code.config import get_config
+            _cfg = get_config()
+            if up_ret_threshold is None:
+                up_ret_threshold = _cfg.regime_up_threshold
+            if down_ret_threshold is None:
+                down_ret_threshold = _cfg.regime_down_threshold
+            if ema_bullish_ratio is None:
+                ema_bullish_ratio = _cfg.regime_ema_bullish_ratio
+        except Exception:
+            # Fallback to module constants (preserves backward compat & offline use)
+            pass
+
+    # Final safety net: 任一 threshold 仍是 None → 用 module constant
+    if up_ret_threshold is None:
+        up_ret_threshold = DEFAULT_UP_RET_THRESHOLD
+    if down_ret_threshold is None:
+        down_ret_threshold = DEFAULT_DOWN_RET_THRESHOLD
+    if ema_bullish_ratio is None:
+        ema_bullish_ratio = DEFAULT_EMA_BULLISH_RATIO
+
     daily_close = resample_to_daily(btc_klines)
     feats = _compute_features(daily_close)
 
