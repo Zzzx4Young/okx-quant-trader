@@ -211,6 +211,74 @@ class Portfolio:
                 pass
             raise
 
+    def _append_sync_history(
+        self,
+        reason: str,
+        drift_detected: bool,
+        ghost_closed_count: int,
+        new_synced_count: int,
+        actions: List[str],
+    ) -> None:
+        """Append a drift entry to sync_history.json (audit trail) — 2026-08-05 P0 fix
+
+        Bug 背景:
+          scripts/sync_portfolio.py (manual sync) 写 sync_history.json ✓
+          code/portfolio.py::reconcile_with_okx (cron auto) 不写 ✗
+          → cron 周期 reconcile 检测到 drift 时, portfolio.json 被修改但
+            sync_history.json 不会被记 → silent log loss
+          → 历史实证: 2026-07-22 ETH long + 2026-07-31 ETH short 引入无 trace
+
+        Design:
+          - 仅当 drift_detected=True 调用 (drift=False 不 spam — 每次 tick matched
+            是常态, 写 sync_history 会污染 audit trail)
+          - sync_history.json 不存在 → 创建空 list
+          - 已存在但损坏 (JSONDecodeError / 不是 list) → 重置为空 list
+            (防 crash-on-bad-file; audit trail 优先级 > 文件保留)
+          - 原子写 (与 _save() 同 pattern: tempfile.mkstemp + fsync + os.replace)
+        """
+        if not drift_detected:
+            return  # design: drift=false 不 spam
+
+        sync_history_path = self._path.parent / "sync_history.json"
+        history: List[Dict[str, Any]] = []
+        if sync_history_path.exists():
+            try:
+                history = json.loads(sync_history_path.read_text(encoding="utf-8"))
+                if not isinstance(history, list):
+                    history = []
+            except (json.JSONDecodeError, OSError):
+                history = []  # 损坏 → 重置（audit trail 优先级 > 文件保留）
+
+        entry = {
+            "at": self._now_iso(),
+            "reason": reason,
+            "drift_detected": drift_detected,
+            "ghost_closed_count": ghost_closed_count,
+            "new_synced_count": new_synced_count,
+            "actions": actions,
+        }
+        history.append(entry)
+
+        # 原子写（与 _save() 同 pattern）
+        dir_name = str(self._path.parent)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=dir_name,
+            prefix=f".{sync_history_path.name}.",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(history, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, sync_history_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+            raise
+
     # ---- 持仓操作 ----
 
     def add_position(self, position: Dict[str, Any]) -> None:
@@ -630,7 +698,9 @@ class Portfolio:
                 mark = float(op.get("markPx", 0) or 0) or entry
                 sz = abs(float(op.get("pos", 0) or 0))
                 lever = float(op.get("lever", 1) or 1)
-                notional = mark * sz
+                # 8-04 P1 fix: notional + margin_est 必须含 ct_val (BTC 100x / ETH 10x off)
+                ct_val = float(ct_val_by_inst.get(op.get("instId"), 1.0))
+                notional = mark * sz * ct_val
                 margin_est = round(notional / lever, 6) if lever > 0 else notional
                 c_time_ms = int(op.get("cTime", 0) or 0)
                 opened_iso = (
@@ -640,7 +710,6 @@ class Portfolio:
                 pos_id = op.get("posId", "")
                 direction = "long" if op.get("posSide") == "long" else "short"
                 sl_tp = self._synthesize_sl_tp(entry, direction)
-                ct_val = float(ct_val_by_inst.get(op.get("instId"), 1.0))
 
                 new_pos = {
                     "symbol": (op.get("instId") or "").replace("-USDT-SWAP", "USDTSWAP"),
@@ -673,8 +742,20 @@ class Portfolio:
             self._data["daily_stats"] = daily
             self._save()
 
+            drift_detected = bool(ghost_closed or new_synced or mismatched)
+            # 2026-08-05 P0 fix: cron 路径必须写 sync_history (防 silent log loss,
+            # 见 _append_sync_history docstring 7-22 ETH long / 7-31 ETH short 实证)
+            if drift_detected:
+                self._append_sync_history(
+                    reason="cron_reconcile",
+                    drift_detected=drift_detected,
+                    ghost_closed_count=len(ghost_closed),
+                    new_synced_count=len(new_synced),
+                    actions=actions,
+                )
+
             return {
-                "drift_detected": bool(ghost_closed or new_synced or mismatched),
+                "drift_detected": drift_detected,
                 "ghost_closed": ghost_closed,
                 "new_synced": new_synced,
                 "matched": matched,
