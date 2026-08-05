@@ -25,10 +25,9 @@ from .config import get_config
 from .client import OKXClient
 from .portfolio import Portfolio
 from .logger import TradeLogger
-from .signal import Signal
 from .risk import RiskGateChecker, RiskGateConfig
-from .risk import RiskCalculator
-from .signal import SignalEngine, Signal
+from .risk import RiskCalculator, RiskGateFailMode, should_fail_closed, is_manual_position
+from .signal import Signal, SignalEngine
 from .notifier import TelegramNotifier, NoopNotifier
 
 logger = logging.getLogger(__name__)
@@ -249,6 +248,25 @@ class Runner:
 
         return False
 
+    @staticmethod
+    def _count_positions_by_source(positions: list) -> tuple:
+        """独立计 manual vs system 仓位。 8-04 Q1 redesign (mixed model)。
+
+        manual: is_manual_position(p) → True (EXTERNAL_* / MANUAL_*) · 与 risk_monitor 同逻辑
+        system: 其他 (EMA20_BREAKOUT / C / D / E 等)
+
+        8-04 #1 fix: size=0 zombie 仍计 position slot (defense-in-depth)
+        8-05 P1 #1: use is_manual_position helper (close 6-copy drift)
+        """
+        manual = 0
+        system = 0
+        for p in positions:
+            if is_manual_position(p):
+                manual += 1
+            else:
+                system += 1
+        return manual, system
+
     def _pre_risk_check(self) -> Dict[str, Any]:
         """
         前置风控检查
@@ -281,12 +299,28 @@ class Runner:
                         "reason": f"连续 {max_consec} 次亏损熔断中，冷静期剩余 {remaining:.0f} 分钟",
                     }
 
-        # ── 持仓上限检查 ──
-        if self._portfolio.position_count() >= self._config.max_concurrent_positions:
+        # ── 持仓上限检查 (8-04 Q1 redesign: mixed model) ──
+        # 独立计 manual vs system · 避免 23:00 cron 永久 block by 3 EXTERNAL_WEB_SYNC manual
+        positions = self._portfolio.get_all_positions()
+        manual_count, system_count = self._count_positions_by_source(positions)
+
+        if manual_count >= self._config.max_manual_positions:
             return {
                 "passed": False,
-                "stage": "position_limit",
-                "reason": f"已达最大持仓数 {self._config.max_concurrent_positions}，禁止新开仓",
+                "stage": "manual_position_limit",
+                "reason": f"manual 仓位已满 {manual_count}/{self._config.max_manual_positions}，禁止新开仓",
+            }
+        if system_count >= self._config.max_system_positions:
+            return {
+                "passed": False,
+                "stage": "system_position_limit",
+                "reason": f"system 仓位已满 {system_count}/{self._config.max_system_positions}，禁止新开仓",
+            }
+        if len(positions) >= self._config.max_total_positions:
+            return {
+                "passed": False,
+                "stage": "total_position_limit",
+                "reason": f"总仓位已满 {len(positions)}/{self._config.max_total_positions}，禁止新开仓",
             }
 
         # ── 流动性 / 黑名单过滤 (Constitution §4) ──
@@ -351,8 +385,21 @@ class Runner:
           4. max_leverage: per-position leverage 上限
           5. max_system_positions_after_manual: manual 满后 system 还能开 N 仓
 
-        Fail-soft: 任何 exception → passed=False + reason 含 "fail-open"（不阻塞 runner）。
+        Fail mode (8-04 Step 2, Iron Rule #11 nuance):
+          - "closed" mode: 任何 exception → fail-closed (显式保守)
+          - "open" mode: 任何 exception → fail-open (显式激进, for testing)
+          - "classified" mode (DEFAULT): transient (OSError/ConnectionError/TimeoutError/
+            FileNotFoundError) → fail-open with explicit reason; 其他 (KeyError/ValueError/
+            ImportError/AttributeError 等 code error) → fail-closed
+          - 未知 mode → fail-closed (safer default, 不静默 fail-open)
+
+        设计哲学:
+          - fail-closed 触发时发 Telegram 报警 (notify_error + dedup_key, 5min 内不重发)
+          - fail-open (transient) 不发报警 (避免 I/O 临时问题造成的 alert spam)
+          - notifier 缺失 / 报错 不应 cascade (防御性 code)
         """
+        # 读 fail mode (config 缺省 → "classified")
+        fail_mode = self._config.get("risk_gate_fail_mode", RiskGateFailMode.CLASSIFIED)
         try:
             positions = self._portfolio.get_all_positions()
             # 读取 equity from circuit breaker state（与 Portfolio 同一来源）
@@ -376,14 +423,48 @@ class Runner:
                 cfg=gate_cfg,
             )
         except Exception as e:
-            logger.warning(f"⚠️ _pre_risk_gates fail-open: {e}")
-            # 返回 passed=True + reason 含 fail-open，避免阻塞 live runner
             from okx.code.risk import RiskGateResult
-            return RiskGateResult(
-                passed=True,
-                failed_gates=[],
-                reasons=[f"fail-open: {e}"],
-            )
+            if should_fail_closed(e, fail_mode):
+                # Fail-closed: 拒入场 + Telegram 报警 (ops 知道有严重问题)
+                logger.warning(f"🚫 _pre_risk_gates fail-closed [{fail_mode}]: {e}")
+                self._notify_fail_closed(e, fail_mode)
+                return RiskGateResult(
+                    passed=False,
+                    failed_gates=["pre_risk_gates_internal_error"],
+                    reasons=[f"fail-closed: {type(e).__name__}: {e}"],
+                )
+            else:
+                # Fail-open (transient): 让交易继续，避免锁死 1 周期 (15min) 造成 missed edge
+                logger.warning(f"⚠️ _pre_risk_gates fail-open-transient [{fail_mode}]: {e}")
+                return RiskGateResult(
+                    passed=True,
+                    failed_gates=[],
+                    reasons=[f"fail-open-transient: {type(e).__name__}: {e}"],
+                )
+
+    def _notify_fail_closed(self, exception: BaseException, fail_mode: str) -> None:
+        """Telegram 报警 (fail-closed 触发时通知 ops)。
+
+        防御性 code:
+        - notifier 缺失 → 静默 skip (不 cascade 到 fail-closed)
+        - notify_error 报错 → 静默 catch (不 cascade 到 fail-closed)
+        - 用 dedup_key 5min 内不重发 (避免 alert spam for 重复 exception)
+        """
+        try:
+            notifier = getattr(self, '_notifier', None)
+            if notifier is None:
+                return
+            error_msg = f"{type(exception).__name__}: {exception}"
+            context = f"mode={fail_mode} · _pre_risk_gates fail-closed"
+            # dedup_key 包含 exception type + fail mode (同类异常 5min 内只发一次)
+            dedup_key = f"risk_gate_fail_closed:{type(exception).__name__}:{fail_mode}"
+            # TelegramNotifier 有 notify_error (含 5min dedup)
+            # NoopNotifier 也有此方法 (no-op)，调用安全
+            if hasattr(notifier, 'notify_error'):
+                notifier.notify_error(error_msg, context=context, dedup_key=dedup_key)
+        except Exception as notify_err:
+            # Alert failure 不应 cascade (不能因 Telegram 挂掉而让 fail-closed 出问题)
+            logger.error(f"⚠️ _notify_fail_closed failed (non-critical): {notify_err}")
 
     def _pre_signal_gates(self) -> Dict[str, Any]:
         """事中防御 gate（薄 wrapper → 委托 code.gates.run_pre_signal_gates）。
@@ -602,6 +683,8 @@ class Runner:
             pass
 
         # ── 委托给 risk.kelly_sizing_decision 纯决策包装 ──
+        # 8-04 Q5/Q6: 显式传 cfg.fractional_kelly (0.5) + cfg.volatility_dampen_factor (1.0)
+        # 否则 risk.py function default (0.25 / 0.7) 会生效 → live system 与 config 脱节
         try:
             return self._risk.kelly_sizing_decision(
                 strategy_stats=strategy_stats,
@@ -610,6 +693,8 @@ class Runner:
                 leverage=int(leverage) if leverage else 3,
                 sl_distance_pct=sl_distance_pct,
                 min_trades_for_kelly=int(min_trades),
+                fractional_kelly=self._risk._config.fractional_kelly,
+                volatility_dampen_factor=self._risk._config.volatility_dampen_factor,
             )
         except Exception as e:
             # 任何 Kelly 计算异常 → 默认路径 (fallback)

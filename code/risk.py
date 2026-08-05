@@ -15,6 +15,53 @@ from typing import Any, Dict, List, NamedTuple, Optional
 from .config import get_config
 
 
+# ────────────────────────────────────────────────────────────
+# Manual Position Detection (2026-08-05 P1 audit #1 wire-up)
+# Iron Rule #5/#7: 抽 helper 统一 6 副本 (runner.py:255,264 · risk.py:791,832,1007 · risk_monitor.py:87)
+# 8-04 之前 4 inline 用 startswith(("EXTERNAL", "MANUAL")) 无下划线,
+# scripts/risk_monitor.py:84 用 ("EXTERNAL", "MANUAL_") 有下划线 — subtle semantic drift.
+# 统一为 ("EXTERNAL", "MANUAL_") — 更严格, 避免 hypothetical "MANUALFOO" 误判。
+# ────────────────────────────────────────────────────────────
+MANUAL_STRATEGY_PREFIXES: tuple = ("EXTERNAL", "MANUAL_")
+
+
+def is_manual_position(p: Any) -> bool:
+    """判定仓位是否来自 Manual (人工/网页) 开仓.
+
+    Iron Rule #5/#7: 抽 helper 关闭 6 副本 drift 入口 (2026-08-05 P1 audit #1).
+
+    接受两种 input (duck typing):
+      - dict (portfolio.json format): p["strategy"]
+      - PositionRisk-like dataclass: p.strategy
+
+    Args:
+        p: position dict 或 dataclass (PositionRisk / FakePositionRisk 等)
+
+    Returns:
+        True = manual 仓 (人工/网页开, runner 不应自动平)
+        False = system 仓 (自动策略开, runner 可管理)
+
+    Design:
+      - MANUAL_STRATEGY_PREFIXES = ("EXTERNAL", "MANUAL_")
+      - 与 scripts/risk_monitor.py:84 常量对齐 (避免两个 helper 行为 drift)
+      - 空 strategy / 缺字段 → False (保守, 不会误判 manual)
+
+    Examples:
+        >>> is_manual_position({"strategy": "EXTERNAL_WEB_SYNC"})
+        True
+        >>> is_manual_position({"strategy": "MANUAL_NO_AUTO_CLOSE"})
+        True
+        >>> is_manual_position({"strategy": "EMA20_BREAKOUT"})
+        False
+    """
+    if isinstance(p, dict):
+        s = p.get("strategy") or ""
+    else:
+        # dataclass / NamedTuple / 任何带 .strategy attr 的对象
+        s = getattr(p, "strategy", None) or ""
+    return any(s.startswith(prefix) for prefix in MANUAL_STRATEGY_PREFIXES)
+
+
 class RiskResult(NamedTuple):
     """风控计算结果"""
     max_size: float          # 最大可开仓位（张数）
@@ -305,7 +352,7 @@ class RiskCalculator:
         # 解释: Kelly b = avg_win / avg_loss, avg_loss = 0 数学上爆掉。
         #       全胜样本 (avg_loss = 0) 不能用 Kelly, 一律走 1% 本金硬上限。
         if avg_loss <= 0:
-            return hard_cap, "no_loss_history_fallback_to_hard_cap_1pct"
+            return hard_cap, f"no_loss_history_fallback_to_hard_cap_{max_loss_pct*100:.0f}pct"
 
         # ── 经典 Kelly 公式 ──
         b = avg_win / avg_loss
@@ -384,6 +431,10 @@ class RiskCalculator:
           - min_trades_for_kelly: 启用 Kelly 需最小历史 trade 数
         """
         # ── 数据不足 fallback ──
+        # 8-05 P2 #2: fallback 行为 hardcoded 为 "use max_loss_percent_per_trade" (Q10.fb)
+        # runner caller 看到 status=="fallback_max_loss_pct" → 用 cfg.max_loss_percent_per_trade
+        # 历史: 8-04 Q10.fb 决策 apply 时将 fallback_behavior 写入 JSON 但代码未读
+        # cleanup: state/config.json 已删 fallback_behavior 字段 (dead config)
         if strategy_stats is None:
             return (
                 "fallback_max_loss_pct",
@@ -760,8 +811,15 @@ class RiskCalculator:
 
 @dataclass
 class PortfolioRisk:
-    """聚合持仓风险指标（包含 manual + system 仓）。"""
+    """聚合持仓风险指标（包含 manual + system 仓）。
+
+    8-05 P1 #2: 加 manual_count + system_count 字段 (single source of truth),
+    关闭 aggregate_exposure 与 check_all_gates 两条独立计算路径的 drift。
+    count 语义: 含 size=0 zombie (与 check_all_gates 原 "position slot reservation" 一致)。
+    """
     position_count: int = 0
+    manual_count: int = 0          # count ALL manual 仓位 (含 size=0 zombie)
+    system_count: int = 0          # count ALL system 仓位 (含 size=0 zombie)
     total_notional_usdt: float = 0.0
     long_notional_usdt: float = 0.0
     short_notional_usdt: float = 0.0
@@ -793,6 +851,15 @@ def aggregate_exposure(positions: List[Dict[str, Any]]) -> PortfolioRisk:
     """
     risk = PortfolioRisk(position_count=len(positions))
 
+    # 8-05 P1 #2: 先计 manual_count / system_count (含 size=0 zombie)
+    # semantic 与 check_all_gates "position slot reservation" 一致
+    # 与 notional 计算 (valid only) 解耦: count 含 zombie, notional 仅 valid
+    for p in positions:
+        if is_manual_position(p):
+            risk.manual_count += 1
+        else:
+            risk.system_count += 1
+
     valid = [p for p in positions if p.get("size", 0) > 0]
     if not valid:
         return risk
@@ -801,7 +868,12 @@ def aggregate_exposure(positions: List[Dict[str, Any]]) -> PortfolioRisk:
     for p in valid:
         size = p.get("size", 0)
         entry = p.get("entry_price", 0)
-        notional = size * entry
+        # 8-04 P0 fix: notional 必须包含 ct_val (OKX SWAP contract multiplier)
+        # ct_val 缺省 1.0 (SPOT or legacy data) · 保持 backward compat
+        # BTC SWAP ct_val=0.01 · ETH SWAP ct_val=0.1
+        # notional = size × entry × ct_val (real USDT exposure)
+        ct_val = float(p.get("ct_val", 1.0))
+        notional = size * entry * ct_val
         direction = p.get("direction", "")
         symbol = p.get("symbol", "")
         leverage = p.get("leverage", 0)
@@ -823,8 +895,8 @@ def aggregate_exposure(positions: List[Dict[str, Any]]) -> PortfolioRisk:
             risk.leverage_max = leverage
         total_leverage += leverage
 
-        # Manual vs system classification
-        is_manual = strategy.startswith(("EXTERNAL", "MANUAL"))
+        # Manual vs system classification (8-05 P1: use helper, close 6-copy drift)
+        is_manual = is_manual_position(p)
         if is_manual:
             risk.has_manual_position = True
             risk.manual_notional_usdt += notional
@@ -913,6 +985,58 @@ class RiskGateResult:
         }
 
 
+# ──────────────────────────────────────────────────────────────
+# Risk Gate Fail Mode Resolution (8-04 Step 2)
+# Iron Rule #11 nuance: 金融 sentinel 不应粗暴 fail-closed
+# - transient (OSError/ConnectionError/TimeoutError/FileNotFoundError) → 临时 I/O 问题
+#   fail-open with explicit reason 比锁死 system 1 周期 (15min cron) 更合理
+# - 其他 (KeyError/ValueError/ImportError/AttributeError) → 代码/schema bug
+#   fail-closed 避免 unverified position
+# - "closed" mode: 显式保守 (任何 exception → fail-closed)
+# - "open" mode: 显式激进 (任何 exception → fail-open, for testing 或已知 buggy env)
+# - 默认 "classified": transient → open, 其他 → closed
+# ──────────────────────────────────────────────────────────────
+
+
+class RiskGateFailMode:
+    """Risk gate fail mode 常量（也接受 raw string for config）。"""
+    CLOSED = "closed"
+    OPEN = "open"
+    CLASSIFIED = "classified"
+
+
+# Transient exceptions: 临时 I/O / 网络问题，下一 tick 大概率恢复
+# fail-open 避免锁死 system 1 周期 (15min) 造成 missed edge
+TRANSIENT_EXCEPTIONS: tuple = (OSError, FileNotFoundError, ConnectionError, TimeoutError)
+
+
+def should_fail_closed(exception: BaseException, mode: str) -> bool:
+    """决定 exception + mode 组合是否应 fail-closed (拒入场)。
+
+    Args:
+        exception: 捕获的异常实例
+        mode: RiskGateFailMode 常量 (closed/open/classified) 或 raw string
+
+    Returns:
+        True → fail-closed (passed=False, 拒入场)
+        False → fail-open (passed=True, reason 含 "fail-open-transient")
+
+    设计：
+    - closed mode: 任何 exception → True (显式保守)
+    - open mode: 任何 exception → False (显式激进)
+    - classified mode: transient exception → False (transient), 其他 → True (code error)
+    - 未知 mode (typo / config corruption) → True (fail-closed by default, 避免静默 fail-open)
+    """
+    if mode == RiskGateFailMode.CLOSED:
+        return True
+    if mode == RiskGateFailMode.OPEN:
+        return False
+    if mode == RiskGateFailMode.CLASSIFIED:
+        return not isinstance(exception, TRANSIENT_EXCEPTIONS)
+    # 未知 mode → fail-closed (safer default)
+    return True
+
+
 class RiskGateChecker:
     """5 个 portfolio-level risk gates 检查。"""
 
@@ -938,15 +1062,11 @@ class RiskGateChecker:
         """
         risk = aggregate_exposure(positions)
 
-        # Count system vs manual
-        system_count = 0
-        manual_count = 0
-        for p in positions:
-            strat = p.get("strategy", "")
-            if strat.startswith(("EXTERNAL", "MANUAL")):
-                manual_count += 1
-            else:
-                system_count += 1
+        # Count system vs manual · 8-05 P1 #2: read from aggregate_exposure (single source)
+        # 之前 8-04 scholar 注释说 "count ALL 含 zombie" — 现统一由 PortfolioRisk 字段提供
+        # aggregate_exposure 已在 semantic 中明确 count 包含 zombie (与原行为一致)
+        system_count = risk.system_count
+        manual_count = risk.manual_count
 
         # 计算 bias / concentration（如果 equity > 0）
         bias_pct = 0.0

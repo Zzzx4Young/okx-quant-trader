@@ -31,6 +31,7 @@ from okx.scripts.risk_thresholds import (
     RiskThreshold,
     get_threshold,
 )
+from okx.code.risk import is_manual_position, MANUAL_STRATEGY_PREFIXES  # 8-05 P1: 复用 risk.py helper
 
 logger = logging.getLogger(__name__)
 
@@ -81,16 +82,8 @@ def _normalize_inst_id(s: str) -> str:
 # Manual 仓位：人工/网页开仓，strategies 是 "EXTERNAL_WEB_SYNC"（OKX 原标签）
 #              或 "MANUAL_NO_AUTO_CLOSE"（v1.8.3+ sync_portfolio 重命名）
 # Auto 仓位：signal_runner 触发，strategies 是 "A" / "B_..." / "C_..." / "D_..."
-MANUAL_STRATEGY_PREFIXES: Tuple[str, ...] = ("EXTERNAL", "MANUAL_")
-
-
-def is_manual_position(p: PositionRisk) -> bool:
-    """判定仓位是否来自 Manual（人工/网页）开仓。
-
-    语义：集中度告警要 Source-filtered，Auto 仓位内部集中度跟 Manual 仓位无关。
-    """
-    s = p.strategy or ""
-    return any(s.startswith(prefix) for prefix in MANUAL_STRATEGY_PREFIXES)
+# 8-05 P1: MANUAL_STRATEGY_PREFIXES + is_manual_position 已抽到 okx.code.risk (单一来源)
+# 这里不再重复定义, import 使用。
 
 
 def _match_strategy(
