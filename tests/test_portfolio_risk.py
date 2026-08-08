@@ -241,3 +241,95 @@ class TestAggregateExposure:
         # BTC/Total = 14056/19149 ≈ 73.4%
         assert risk.symbol_concentration["BTCUSDTSWAP"] == pytest.approx(14056.24, rel=1e-3)
         assert risk.symbol_concentration["ETHUSDTSWAP"] == pytest.approx(5092.88, rel=1e-3)
+
+
+# ──────────────────────────────────────────────────────────────
+# L1 Invariant: notional 必须包含 ct_val (8-04 P0 fix)
+# 8-04 scholar evaluation 发现: notional = size × entry (忽略 ct_val)
+# 导致 BTC 100x / ETH 10x under-report real notional
+# 所有 risk gate threshold 被系统性格价偏移 → 过保守 (under-trading)
+# ──────────────────────────────────────────────────────────────
+
+class TestPortfolioRiskCtValInvariant:
+    """L1 invariant: aggregate_exposure notional 必须 = size × entry × ct_val (含 contract multiplier)。"""
+
+    def test_btc_swap_notional_includes_ct_val(self):
+        """BTC SWAP ct_val=0.01 → notional = size × entry × 0.01 (不是 size × entry)."""
+        from okx.code.risk import aggregate_exposure
+
+        # BTC: size=0.22, entry=$63892, ct_val=0.01 → real notional = $140.56
+        # 错误 notional (无 ct_val) = $14,056 (100x 偏大)
+        positions = [{
+            "symbol": "BTCUSDTSWAP", "direction": "long",
+            "size": 0.22, "entry_price": 63892.0, "leverage": 5,
+            "strategy": "EMA20_BREAKOUT", "ct_val": 0.01,
+        }]
+        risk = aggregate_exposure(positions)
+
+        assert risk.total_notional_usdt == pytest.approx(140.56, rel=1e-3), (
+            f"BTC real notional 应为 $140.56 (size × entry × ct_val=0.01), "
+            f"实际 {risk.total_notional_usdt}. 如果 ~$14056 则 ct_val 被忽略"
+        )
+
+    def test_eth_swap_notional_includes_ct_val(self):
+        """ETH SWAP ct_val=0.1 → notional = size × entry × 0.1 (不是 size × entry)."""
+        from okx.code.risk import aggregate_exposure
+
+        # ETH: size=1.09, entry=$1926.20, ct_val=0.1 → real notional = $209.96
+        # 错误 notional (无 ct_val) = $2,099.56 (10x 偏大)
+        positions = [{
+            "symbol": "ETHUSDTSWAP", "direction": "long",
+            "size": 1.09, "entry_price": 1926.2, "leverage": 5,
+            "strategy": "EMA20_BREAKOUT", "ct_val": 0.1,
+        }]
+        risk = aggregate_exposure(positions)
+
+        assert risk.total_notional_usdt == pytest.approx(209.96, rel=1e-3), (
+            f"ETH real notional 应为 $209.96, 实际 {risk.total_notional_usdt}. "
+            f"如果 ~$2099.56 则 ct_val 被忽略"
+        )
+
+    def test_spot_no_ct_val_defaults_to_one(self):
+        """SPOT 仓无 ct_val (默认 1.0) → notional = size × entry (与 ct_val=1.0 一致).
+
+        防御性 default: 旧 portfolio.json 数据可能没 ct_val 字段 (SPOT or legacy).
+        不会被 L1 invariant 打破 (默认 1.0 等价于 无 multiplier).
+        """
+        from okx.code.risk import aggregate_exposure
+
+        positions = [{
+            "symbol": "BTCUSDT", "direction": "long",  # SPOT
+            "size": 0.5, "entry_price": 60000.0, "leverage": 1,
+            "strategy": "EMA20_BREAKOUT",
+            # no ct_val field
+        }]
+        risk = aggregate_exposure(positions)
+
+        assert risk.total_notional_usdt == pytest.approx(30000.0, rel=1e-3)
+
+    def test_demo_portfolio_with_ct_val_total(self):
+        """3-position demo portfolio (BTC + ETH long + ETH short) 用真实 ct_val → total=$649.85."""
+        from okx.code.risk import aggregate_exposure
+
+        positions = [
+            {"symbol": "BTCUSDTSWAP", "direction": "long",
+             "size": 0.22, "entry_price": 63892.01, "leverage": 5,
+             "strategy": "EXTERNAL_WEB_SYNC", "ct_val": 0.01},
+            {"symbol": "ETHUSDTSWAP", "direction": "long",
+             "size": 1.09, "entry_price": 1926.20, "leverage": 5,
+             "strategy": "EXTERNAL_WEB_SYNC", "ct_val": 0.1},
+            {"symbol": "ETHUSDTSWAP", "direction": "short",
+             "size": 1.59, "entry_price": 1882.59, "leverage": 10,
+             "strategy": "EXTERNAL_WEB_SYNC", "ct_val": 0.1},
+        ]
+        risk = aggregate_exposure(positions)
+
+        # BTC: 0.22 × 63892.01 × 0.01 = 140.56
+        # ETH long: 1.09 × 1926.20 × 0.1 = 209.96
+        # ETH short: 1.59 × 1882.59 × 0.1 = 299.33
+        # Total: 649.85
+        assert risk.total_notional_usdt == pytest.approx(649.85, rel=1e-2)
+        # symbol concentration 用 real notional
+        assert risk.symbol_concentration["BTCUSDTSWAP"] == pytest.approx(140.56, rel=1e-2)
+        assert risk.symbol_concentration["ETHUSDTSWAP"] == pytest.approx(509.29, rel=1e-2)
+

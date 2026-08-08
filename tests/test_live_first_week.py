@@ -56,6 +56,10 @@ class FakePortfolio:
     def position_count(self):
         return 0
 
+    # 8-04 Q1 redesign: runner 改用 get_all_positions 独立计 manual vs system
+    def get_all_positions(self):
+        return []  # 默认空 portfolio → 不会触发任何 limit
+
 
 def test_mark_first_live_tick_idempotent():
     """live 首次构造时设置, 后续构造不覆盖 (幂等)。"""
@@ -107,6 +111,10 @@ class FakeConfig:
         self.audit_max_consecutive_losses = 3
         self.audit_lockout_duration_minutes = 30
         self.max_concurrent_positions = 3
+        # 8-04 Q1 redesign: mixed model manual/system cap
+        self.max_manual_positions = 5
+        self.max_system_positions = 5
+        self.max_total_positions = 10
         self.whitelist_symbols = whitelist or []
         self.audit_enable_meltdown_lock = False
         self.max_loss_percent_per_trade = 1.0
