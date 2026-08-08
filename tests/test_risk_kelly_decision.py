@@ -156,18 +156,23 @@ def test_kelly_decision_low_wr_below_cap_returns_active(risk):
 
 
 def test_kelly_decision_high_wr_capped_to_hard_cap(risk):
-    """WR=70%, b=3: Kelly 想要 15% pct → cap 到 hard_cap 1%.
-    (calculate_kelly_size 内部已 cap, reason 包含 'capped_at_max_loss_X.Xpct')."""
+    """WR=70%, b=3: Kelly 想要 15% pct (frac 0.25 default) → cap 到 hard_cap 2% (Q9 改 config).
+    (calculate_kelly_size 内部已 cap, reason 包含 'capped_at_max_loss_X.Xpct').
+
+    8-04 Q9 redesign: cap 2% (从 config). Q5 (frac 0.5) 需要 caller 显式传 (function default 仍 0.25 保持 backward compat).
+    min_trades_for_kelly=15 (8-04 Q10: 30 → 15) 在 call site 由 caller 传 config 值。
+    """
     stats = FakeStats(n=50, win_rate=0.7, avg_win_usd=300.0, avg_loss_usd=100.0)
     status, pct, reason = risk.kelly_sizing_decision(
         strategy_stats=stats, equity=10000.0, atr_ratio=1.0, leverage=3,
-        sl_distance_pct=0.005, min_trades_for_kelly=30,
+        sl_distance_pct=0.005, min_trades_for_kelly=15,  # 8-04 Q10: 30 → 15
     )
     assert status == "kelly_active"
     assert pct == pytest.approx(risk._config.max_loss_percent_per_trade, rel=1e-3)
-    # calculate_kelly_size 的 cap reason 格式
-    assert "capped_at_max_loss_1.0pct" in reason
-    assert "Kelly_wants_15" in reason  # 原应 15% 是如大小写存在
+    # calculate_kelly_size 的 cap reason 格式 (Q9: cap 从 1% → 2%, reason 动态生成)
+    assert "capped_at_max_loss_2.0pct" in reason
+    # f_full = 0.6, frac default 0.25 = 0.15 = 15% → "Kelly_wants_15"
+    assert "Kelly_wants_15" in reason
 
 
 def test_kelly_decision_no_loss_history_fallback_to_hard_cap(risk):

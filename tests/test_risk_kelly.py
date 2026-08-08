@@ -100,8 +100,9 @@ def test_kelly_classic_50_wr_b2_full(risk):
 
 
 def test_kelly_default_fractional_is_quarter(risk):
-    """Fractional Kelly 默认 1/4: WR=50%, b=2 → 0.0625 × equity=625,
-    被硬上限 cap 到 1% × equity=100 (Constitution §5)."""
+    """Fractional Kelly 默认 1/2 (8-04 Q5): WR=50%, b=2 → f_full=0.25
+    frac 0.5 = 0.125, size = 1250 > 200 (2% × equity) cap → 200.
+    Q8 移除了 1% hard cap, Q9 改 cap 为 2% per trade."""
     equity = 10000.0
     size, reason = risk.calculate_kelly_size(
         win_rate=0.5, avg_win=200.0, avg_loss=100.0,  # b=2
@@ -109,13 +110,12 @@ def test_kelly_default_fractional_is_quarter(risk):
         current_atr_ratio=1.0,
         leverage=3,
         sl_distance_pct=0.005,
-        # default fractional_kelly = 0.25
+        # default fractional_kelly = 0.5 (8-04 Q5)
     )
-    # f_full = 0.25, frac 1/4 = 0.0625, size = 625 > 100 cap
-    # → size = 100 (= max_loss_pct × equity = 1% × 10000)
-    assert size == pytest.approx(equity * 0.01, rel=1e-3)
-    assert "capped_at_max_loss_1.0pct" in reason
-    # 大小写不敏感检查: cap 路径 reason 含 "Kelly_wants" 原始 Kelly 意图
+    # f_full = 0.25, frac 1/2 = 0.125, size = 1250 > 200 cap
+    # → size = 200 (= max_loss_pct × equity = 2% × 10000)
+    assert size == pytest.approx(equity * 0.02, rel=1e-3)
+    assert "capped_at_max_loss_2.0pct" in reason
     assert ("kelly" in reason.lower()) and ("capped" in reason.lower())
 
 
@@ -165,8 +165,9 @@ def test_kelly_zero_win_rate_returns_zero(risk):
 # ──────────── Hard Cap (Constitution §5 不破) ────────────
 
 def test_kelly_hard_cap_at_1pct(risk):
-    """WR=80%, b=3 → Kelly f_full = (0.8*3-0.2)/3 = 0.733 → fractional 1/4 = 0.183
-    0.183 × equity = 大于 1% 本金硬上限 → cap 到 1%."""
+    """WR=80%, b=3 → Kelly f_full = (0.8*3-0.2)/3 = 0.733 → fractional 1/2 = 0.367
+    0.367 × equity = 3667 > 200 (2% × equity) cap → cap 到 2%.
+    8-04 Q5 (1/2 Kelly) + Q9 (2% per trade) 共同决定."""
     equity = 10000.0
     size, reason = risk.calculate_kelly_size(
         win_rate=0.8, avg_win=300.0, avg_loss=100.0,  # b=3, WR=80%
@@ -175,12 +176,12 @@ def test_kelly_hard_cap_at_1pct(risk):
         leverage=3,
         sl_distance_pct=0.005,
     )
-    # f_full = 0.733, fractional 1/4 = 0.183
-    # 0.183 × 10000 = 1833 > 100 (1% 本金硬上限)
-    # → size = 100 (= max_loss_pct × equity = 1% × 10000)
-    assert size == pytest.approx(equity * 0.01, rel=1e-3)
+    # f_full = 0.733, fractional 1/2 = 0.367
+    # 0.367 × 10000 = 3667 > 200 (2% 本金硬上限)
+    # → size = 200 (= max_loss_pct × equity = 2% × 10000)
+    assert size == pytest.approx(equity * 0.02, rel=1e-3)
     assert "capped" in reason
-    assert "max_loss_1.0pct" in reason
+    assert "max_loss_2.0pct" in reason
 
 
 def test_kelly_no_cap_below_threshold(risk):
@@ -204,9 +205,9 @@ def test_kelly_no_cap_below_threshold(risk):
 
 
 def test_kelly_never_violates_1pct_cap(risk):
-    """遍历各种参数, size 永远不超过 1% 本金硬上限."""
+    """遍历各种参数, size 永远不超过 2% 本金硬上限 (8-04 Q9: 1% → 2%)."""
     equity = 10000.0
-    hard_cap = equity * 0.01
+    hard_cap = equity * 0.02  # 8-04 Q9: 1% → 2%
     # 大量样本
     for wr in [0.1, 0.3, 0.5, 0.7, 0.9, 1.0]:
         for b in [0.5, 1.0, 2.0, 5.0, 10.0]:
@@ -280,7 +281,7 @@ def test_kelly_volatility_threshold_boundary(risk):
 # ──────────── 数据不足 fallback ────────────
 
 def test_kelly_no_loss_history_fallback_to_hard_cap(risk):
-    """avg_loss=0 → no_loss_history fallback → 返回 1% 本金硬上限."""
+    """avg_loss=0 → no_loss_history fallback → 返回 2% 本金硬上限 (8-04 Q9: 1% → 2%)."""
     equity = 10000.0
     size, reason = risk.calculate_kelly_size(
         win_rate=1.0, avg_win=100.0, avg_loss=0.0,  # 无任何亏损历史
@@ -289,8 +290,8 @@ def test_kelly_no_loss_history_fallback_to_hard_cap(risk):
         leverage=3,
         sl_distance_pct=0.005,
     )
-    assert size == pytest.approx(equity * 0.01, rel=1e-3)
-    assert "no_loss_history_fallback_to_hard_cap_1pct" in reason
+    assert size == pytest.approx(equity * 0.02, rel=1e-3)
+    assert "no_loss_history_fallback_to_hard_cap_2pct" in reason
 
 
 def test_kelly_volatility_dampen_does_not_affect_fallback(risk):
@@ -411,9 +412,9 @@ def test_kelly_reason_always_non_empty(risk):
 
 
 def test_kelly_uses_config_max_loss_pct(risk):
-    """Kelly 必须读取 config.max_loss_percent_per_trade (Constitution §5)."""
-    # 默认 cfg.max_loss_percent_per_trade = 1.0
-    assert risk._config.max_loss_percent_per_trade == 1.0
+    """Kelly 必须读取 config.max_loss_percent_per_trade (Constitution §5, 8-04 Q9: 1% → 2%)."""
+    # 默认 cfg.max_loss_percent_per_trade = 2.0 (8-04 Q9)
+    assert risk._config.max_loss_percent_per_trade == 2.0
     # 用一个高 WR + 高 b 的 case
     equity = 10000.0
     size, reason = risk.calculate_kelly_size(
@@ -424,7 +425,7 @@ def test_kelly_uses_config_max_loss_pct(risk):
         sl_distance_pct=0.005,
     )
     # f_full = (0.95*5 - 0.05) / 5 = 0.94
-    # frac 1/4 = 0.235
-    # size = 0.235 × 10000 = 2350 > 100 (1% × 10000) → cap 到 100
-    assert size == pytest.approx(equity * 0.01, rel=1e-3)
-    assert "max_loss_1.0pct" in reason  # 来自 config
+    # frac 1/2 (Q5) = 0.47
+    # size = 0.47 × 10000 = 4700 > 200 (2% × 10000) → cap 到 200
+    assert size == pytest.approx(equity * 0.02, rel=1e-3)
+    assert "max_loss_2.0pct" in reason  # 来自 config
