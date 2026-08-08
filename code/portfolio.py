@@ -32,6 +32,76 @@ class StrategyStats(NamedTuple):
     avg_loss_usd: float    # 平均亏损笔 |pnl| (USD, 正数; 0 表示该策略从未亏损过)
 
 
+# ──────────────────────────────────────────────────────────────────
+# Module-level sync_history helper (Iron Rule #6/#7 single source of truth)
+# ──────────────────────────────────────────────────────────────────
+
+def append_sync_history(
+    parent_dir: Path,
+    reason: str,
+    drift_detected: bool,
+    ghost_closed_count: int,
+    new_synced_count: int,
+    actions: List[str],
+) -> None:
+    """Append a drift entry to sync_history.json (atomic, shared helper).
+
+    Iron Rule #6/#7 (单逻辑两份 → drift 必然):
+    - 2026-08-05 P0 fix: Portfolio._append_sync_history (cron path) 用此 pattern
+    - 2026-08-08 P1-2 refactor: scripts/sync_portfolio.py (manual CLI path) 也调此 helper
+    - 单一来源 = 统一 timestamp 格式 + atomic write + JSONDecodeError recovery
+
+    Args:
+        parent_dir: portfolio.json 所在目录 (sync_history.json 同目录)
+        reason: drift 来源 ("cron_reconcile" / "manual_sync_<reason>" / 等)
+        drift_detected: 是否检测到 drift (False 时跳过写入, no spam)
+        ghost_closed_count: ghost close 数量
+        new_synced_count: new synced 数量
+        actions: drift 描述列表
+    """
+    if not drift_detected:
+        return  # design: drift=false 不 spam (与 Portfolio._append_sync_history 一致)
+
+    sync_history_path = Path(parent_dir) / "sync_history.json"
+    history: List[Dict[str, Any]] = []
+    if sync_history_path.exists():
+        try:
+            history = json.loads(sync_history_path.read_text(encoding="utf-8"))
+            if not isinstance(history, list):
+                history = []
+        except (json.JSONDecodeError, OSError):
+            history = []  # 损坏 → 重置（audit trail 优先级 > 文件保留）
+
+    entry = {
+        "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),  # UTC 统一格式
+        "reason": reason,
+        "drift_detected": drift_detected,
+        "ghost_closed_count": ghost_closed_count,
+        "new_synced_count": new_synced_count,
+        "actions": actions,
+    }
+    history.append(entry)
+
+    # 原子写（与 Portfolio._save() 同 pattern · 7-31 lesson）
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(parent_dir),
+        prefix=f".{sync_history_path.name}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, sync_history_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 class Portfolio:
     """组合状态管理器（线程安全）"""
 
@@ -219,65 +289,25 @@ class Portfolio:
         new_synced_count: int,
         actions: List[str],
     ) -> None:
-        """Append a drift entry to sync_history.json (audit trail) — 2026-08-05 P0 fix
+        """Append a drift entry to sync_history.json (audit trail) — thin wrapper.
 
-        Bug 背景:
-          scripts/sync_portfolio.py (manual sync) 写 sync_history.json ✓
-          code/portfolio.py::reconcile_with_okx (cron auto) 不写 ✗
-          → cron 周期 reconcile 检测到 drift 时, portfolio.json 被修改但
-            sync_history.json 不会被记 → silent log loss
-          → 历史实证: 2026-07-22 ETH long + 2026-07-31 ETH short 引入无 trace
+        Iron Rule #6/#7 (单逻辑两份 → drift 必然):
+          - 2026-08-08 P1-2 refactor: delegate 到 module-level append_sync_history helper
+          - scripts/sync_portfolio.py (manual CLI) 也调同一 helper
+          - 单一来源 = 统一 timestamp 格式 + atomic write + JSONDecodeError recovery
 
-        Design:
-          - 仅当 drift_detected=True 调用 (drift=False 不 spam — 每次 tick matched
-            是常态, 写 sync_history 会污染 audit trail)
-          - sync_history.json 不存在 → 创建空 list
-          - 已存在但损坏 (JSONDecodeError / 不是 list) → 重置为空 list
-            (防 crash-on-bad-file; audit trail 优先级 > 文件保留)
-          - 原子写 (与 _save() 同 pattern: tempfile.mkstemp + fsync + os.replace)
+        设计历史:
+          - 2026-08-05 P0 fix: cron reconcile 路径不再 silent log loss
+          - 2026-08-08 P1-2: manual sync 路径也统一到 helper
         """
-        if not drift_detected:
-            return  # design: drift=false 不 spam
-
-        sync_history_path = self._path.parent / "sync_history.json"
-        history: List[Dict[str, Any]] = []
-        if sync_history_path.exists():
-            try:
-                history = json.loads(sync_history_path.read_text(encoding="utf-8"))
-                if not isinstance(history, list):
-                    history = []
-            except (json.JSONDecodeError, OSError):
-                history = []  # 损坏 → 重置（audit trail 优先级 > 文件保留）
-
-        entry = {
-            "at": self._now_iso(),
-            "reason": reason,
-            "drift_detected": drift_detected,
-            "ghost_closed_count": ghost_closed_count,
-            "new_synced_count": new_synced_count,
-            "actions": actions,
-        }
-        history.append(entry)
-
-        # 原子写（与 _save() 同 pattern）
-        dir_name = str(self._path.parent)
-        fd, tmp_path = tempfile.mkstemp(
-            dir=dir_name,
-            prefix=f".{sync_history_path.name}.",
-            suffix=".tmp",
+        append_sync_history(
+            parent_dir=self._path.parent,
+            reason=reason,
+            drift_detected=drift_detected,
+            ghost_closed_count=ghost_closed_count,
+            new_synced_count=new_synced_count,
+            actions=actions,
         )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(history, f, indent=2, ensure_ascii=False)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, sync_history_path)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except FileNotFoundError:
-                pass
-            raise
 
     # ---- 持仓操作 ----
 
