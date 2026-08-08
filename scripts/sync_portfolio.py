@@ -24,6 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from okx.code.client import OKXClient  # noqa
+from okx.code.portfolio import append_sync_history  # noqa  # 2026-08-08 P1-2 refactor: Iron Rule #6/#7
 
 
 def _now_iso() -> str:
@@ -418,27 +419,16 @@ def main() -> int:
         )
         with open(backup_path, "w") as f:
             json.dump(_load(portfolio_path), f, ensure_ascii=False, indent=2)
-        # 更新 sync log
-        sync_log = portfolio_path.parent / "sync_history.json"
-        log_entry = {
-            "at": _now_iso(),
-            "reason": args.reason,
-            "drift_detected": result["drift_detected"],
-            "ghost_closed_count": len(result["ghost_closed"]),
-            "new_synced_count": len(result["new_synced"]),
-            "actions": result["actions"],
-        }
-        log_data = []
-        if sync_log.exists():
-            try:
-                log_data = _load(sync_log)
-                if not isinstance(log_data, list):
-                    log_data = []
-            except Exception:
-                log_data = []
-        log_data.append(log_entry)
-        with open(sync_log, "w") as f:
-            json.dump(log_data, f, indent=2, ensure_ascii=False)
+        # 更新 sync log (delegate 到 module-level helper · 2026-08-08 P1-2)
+        # Iron Rule #6/#7: 单一来源 = 统一 timestamp + atomic write + JSONDecodeError recovery
+        append_sync_history(
+            parent_dir=portfolio_path.parent,
+            reason=args.reason,
+            drift_detected=result["drift_detected"],
+            ghost_closed_count=len(result["ghost_closed"]),
+            new_synced_count=len(result["new_synced"]),
+            actions=result["actions"],
+        )
         # 写 portfolio
         _save(portfolio_path, local)
         print(f"[sync] backup saved to {backup_path}")
