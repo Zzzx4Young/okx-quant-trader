@@ -67,6 +67,19 @@ STRATEGY_ALIASES = {
 }
 
 
+# 8-04 P0 fix: OKX SWAP contract multiplier · 不传默认 1.0 (backward compat)
+# BTC-USDT-SWAP ctVal=0.01 · ETH-USDT-SWAP ctVal=0.1 · 其他/SPOT=1.0
+INST_CT_VAL = {
+    "BTC-USDT-SWAP": 0.01,
+    "ETH-USDT-SWAP": 0.1,
+}
+
+
+def get_ct_val(inst_id: str) -> float:
+    """返回 inst_id 的 OKX SWAP contract multiplier。未知合约返回 1.0 (backward compat)."""
+    return INST_CT_VAL.get(inst_id, 1.0)
+
+
 def resolve_strategy(name: str) -> str:
     """接受 'A' 或 'A_EMA20_BREAKOUT'，返回 STRATEGIES 里的全名。"""
     resolved = STRATEGY_ALIASES.get(name.upper(), name)
@@ -127,6 +140,8 @@ def run_one(
     data = load(inst_id, bar, start_ts=start_ts, end_ts=end_ts)
     sig = STRATEGIES[strategy_full]
     fee_rate = fee_bps / 10000.0
+    # 8-04 P0 fix: 传 ct_val (OKX SWAP contract multiplier) · BTC=0.01 / ETH=0.1
+    ct_val = get_ct_val(inst_id)
     engine = BacktestEngine(
         data,
         initial_capital=initial_capital,
@@ -134,6 +149,7 @@ def run_one(
         slippage_bps=int(slippage_bps),
         taker_fee=fee_rate,
         signal_provider=sig,
+        ct_val=ct_val,
     )
     result = engine.run()
     m = result.metrics()

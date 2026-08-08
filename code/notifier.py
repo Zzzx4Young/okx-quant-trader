@@ -215,6 +215,18 @@ class TelegramNotifier:
         sl_pct = (sl - entry) / entry * 100 if entry > 0 else 0
         tp_pct = (tp - entry) / entry * 100 if entry > 0 else 0
 
+        # 8-04 P2 fix: 重新计算 real margin (防止旧 portfolio.json 中 100x 偏大值)
+        # 旧 margin 存的是 size × entry / leverage (无 ct_val), BTC 100x off, ETH 10x off
+        # 修复后: 始终以 size × entry × ct_val / leverage 计算 (与 BacktestEngine 一致)
+        try:
+            size_f = float(position.get('size', 0))
+            entry_f = float(position.get('entry_price', 0))
+            lev_f = int(position.get('leverage', 1)) or 1
+            ct_val_f = float(position.get('ct_val', 1.0))
+            real_margin = (size_f * entry_f * ct_val_f) / lev_f if lev_f > 0 else 0
+        except (TypeError, ValueError):
+            real_margin = float(position.get('margin', 0))
+
         text = (
             f"{direction_emoji} <b>开仓</b> #{position['symbol']}\n\n"
             f"方向: {direction_cn} ({position['direction']})\n"
@@ -223,7 +235,7 @@ class TelegramNotifier:
             f"止盈: <code>{_fmt_price(tp)}</code> ({_fmt_pct(tp_pct)})\n"
             f"杠杆: {position.get('leverage', '?')}x {position.get('margin_mode', 'isolated')}\n"
             f"数量: {position.get('size', '?')} 张\n"
-            f"保证金: {_fmt_usdt(position.get('margin', 0))} USDT\n"
+            f"保证金: {_fmt_usdt(real_margin)} USDT\n"
             f"策略: {position.get('trigger_strategy', position.get('strategy', '?'))}\n"
             f"订单: <code>{position.get('order_id', '?')}</code>\n"
             f"\n⏰ {_now_str()}"

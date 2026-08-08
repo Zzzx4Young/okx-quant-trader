@@ -66,11 +66,16 @@ class Position:
     sl_price: float
     tranches: List[PositionTranche] = field(default_factory=list)
     strategy: str = ""
+    ct_val: float = 1.0             # 8-04 P0 fix: OKX SWAP contract multiplier (default 1.0 backward compat)
     
     @property
     def nominal_value(self) -> float:
-        """当前名义价值（已按 tranche 折扣），用于 funding 扣除 — Phase 2 关键"""
-        return self.current_size * self.entry_fill_price
+        """当前名义价值（已按 tranche 折扣），用于 funding 扣除 — Phase 2 关键。
+
+        8-04 P1 fix: 必须包含 ct_val (BTC=0.01, ETH=0.1)
+        旧公式 self.current_size * self.entry_fill_price 缺 ct_val → funding fee 100x off
+        """
+        return self.current_size * self.entry_fill_price * self.ct_val
 
 
 @dataclass
@@ -207,6 +212,7 @@ class BacktestEngine:
         tp_partial_rr: Tuple[float, ...] = DEFAULT_TP_PARTIAL_RR,           # Phase 2
         risk_per_trade: float = DEFAULT_RISK_PCT,
         signal_provider: Optional[Callable] = None,           # Phase 2: 可插拔策略信号
+        ct_val: float = 1.0,                                  # 8-04 P0 fix: OKX SWAP contract multiplier (default 1.0 backward compat)
     ):
         self.data = data
         self.initial_capital = initial_capital
@@ -219,6 +225,7 @@ class BacktestEngine:
         self.tp_partial_rr = tp_partial_rr                    # Phase 2
         self.risk_per_trade = risk_per_trade
         self.signal_provider = signal_provider                 # Phase 2: 外部策略信号函数（None=默认EMA crossover）
+        self.ct_val = ct_val                                   # 8-04 P0 fix: BTC=0.01, ETH=0.1 (default 1.0 = SPOT/legacy)
         
         # 预计算指标（O(n) 一次，避免 _generate_signal 重复计算变 O(n²)）
         self._indicators = self._compute_indicators()
@@ -496,11 +503,12 @@ class BacktestEngine:
         if size <= 0:
             return
         
-        margin = (size * entry_price) / self.leverage
+        margin = (size * entry_price * self.ct_val) / self.leverage   # 8-04 P0 fix: ct_val multiplier
         
-        # ── Phase 2-1: 入场滑点（Taker 5bps 不利偏移）──
+        # ── Phase 2-1: 入场滑点（Taker 5bps 不利偏移）· 8-04 P0 fix: slip_cost 必须含 ct_val ──
+        # 旧: slip_cost = abs(entry_fill_price - entry_price) * size (PnL 100x off for BTC)
         entry_fill_price = self._apply_slippage(entry_price, direction, is_entry=True)
-        slip_cost = abs(entry_fill_price - entry_price) * size
+        slip_cost = abs(entry_fill_price - entry_price) * size * self.ct_val
         self.equity -= slip_cost
         self.slippage_cost_total += slip_cost
         self.current_slippage_cost = slip_cost
@@ -527,10 +535,13 @@ class BacktestEngine:
             sl_price=sl_price,
             tranches=tranches,
             strategy=strategy,
+            ct_val=self.ct_val,  # 8-04 P0 fix: propagate ct_val to Position (for funding fee calc)
         )
-        
-        # 入场 fee（Taker）
-        entry_fee = size * entry_fill_price * self.taker_fee
+
+        # 入场 fee（Taker）· 8-04 P0 fix: 必须包含 ct_val
+        # 旧: entry_fee = size * entry_fill_price * self.taker_fee (fee 100x off for BTC)
+        # 新: entry_fee = size * entry_fill_price * ct_val * self.taker_fee
+        entry_fee = size * entry_fill_price * self.ct_val * self.taker_fee
         self.equity -= entry_fee
         self.fee_paid_total += entry_fee
         self.current_fee = entry_fee
@@ -561,7 +572,7 @@ class BacktestEngine:
             fill_price=entry_fill_price,
             fill_size=size,
             fill_ts=entry_ts,
-            nominal_value=size * entry_fill_price,
+            nominal_value=size * entry_fill_price * self.ct_val,  # 8-04 P0 fix: 含 ct_val (funding fee 正确)
         ))
     
     # ─── Phase 2 核心：fill 处理（SL + 3 批 tranche）───
@@ -591,17 +602,18 @@ class BacktestEngine:
         
         if sl_hit:
             exit_fill = self._apply_slippage(pos.sl_price, pos.direction, is_entry=False)
-            slip_cost_here = abs(exit_fill - pos.sl_price) * pos.current_size
+            # 8-04 P0 fix: slip_cost + nominal_value 必须含 ct_val
+            slip_cost_here = abs(exit_fill - pos.sl_price) * pos.current_size * pos.ct_val
             self.equity -= slip_cost_here
             self.slippage_cost_total += slip_cost_here
             self.current_slippage_cost += slip_cost_here
-            
+
             fills.append(FillEvent(
                 fill_type="sl",
                 fill_price=exit_fill,
                 fill_size=pos.current_size,
                 fill_ts=t_curr,
-                nominal_value=pos.current_size * exit_fill,
+                nominal_value=pos.current_size * exit_fill * pos.ct_val,
             ))
             self._pending_exit_reason = "sl_full"
             return fills  # SL = full close, 不再检查 tranche
@@ -623,19 +635,20 @@ class BacktestEngine:
             tranche.executed_at_ts = t_curr
             
             tranche_size = pos.initial_size * tranche.ratio
-            tranche_nominal = tranche_size * pos.entry_fill_price
-            
+            # 8-04 P0 fix: tranche_nominal 必须含 ct_val (tranche_fee 间接修复)
+            tranche_nominal = tranche_size * pos.entry_fill_price * pos.ct_val
+
             # 关键：缩减小 current_size → 下 bar funding 自动 recalculating
             pos.current_size -= tranche_size
             if pos.current_size < 1e-9:
                 pos.current_size = 0
-            
+
             # Tranche fill fee（Taker 同档；OKX maker 2bps 更优；本阶段统一 taker 简化）
             tranche_fee = tranche_nominal * self.taker_fee
             self.equity -= tranche_fee
             self.fee_paid_total += tranche_fee
             self.current_fee += tranche_fee
-            
+
             fills.append(FillEvent(
                 fill_type=f"tp_{idx+1}",
                 fill_price=tranche.target_price,
@@ -662,11 +675,11 @@ class BacktestEngine:
         
         pos = self.position
         if pos is not None:
-            # 该 fill 的 PnL 贡献
+            # 该 fill 的 PnL 贡献 · 8-04 P0 fix: gross PnL 必须含 ct_val (PnL 100x off for BTC)
             if pos.direction == "long":
-                gross = (fill.fill_price - pos.entry_fill_price) * fill.fill_size
+                gross = (fill.fill_price - pos.entry_fill_price) * fill.fill_size * pos.ct_val
             else:
-                gross = (pos.entry_fill_price - fill.fill_price) * fill.fill_size
+                gross = (pos.entry_fill_price - fill.fill_price) * fill.fill_size * pos.ct_val
             self.current_trade.gross_pnl += gross
             
             # 资金回流（用户视角：close 减仓时 gain 释放回账户）
@@ -718,26 +731,28 @@ class BacktestEngine:
         pos = self.position
         if apply_slippage:
             exit_fill = self._apply_slippage(exit_price, pos.direction, is_entry=False)
-            slip_cost = abs(exit_fill - exit_price) * pos.current_size
+            # 8-04 P0 fix: slip_cost 必须含 ct_val
+            slip_cost = abs(exit_fill - exit_price) * pos.current_size * pos.ct_val
             self.equity -= slip_cost
             self.slippage_cost_total += slip_cost
             self.current_slippage_cost += slip_cost
         else:
             exit_fill = exit_price
-        
+
         self.current_trade.fills.append(FillEvent(
             fill_type=reason,
             fill_price=exit_fill,
             fill_size=pos.current_size,
             fill_ts=exit_ts,
-            nominal_value=pos.current_size * exit_fill,
+            # 8-04 P0 fix: nominal_value 必须含 ct_val
+            nominal_value=pos.current_size * exit_fill * pos.ct_val,
         ))
-        
-        # Gross PnL
+
+        # Gross PnL · 8-04 P0 fix: gross PnL 必须含 ct_val
         if pos.direction == "long":
-            gross = (exit_fill - pos.entry_fill_price) * pos.current_size
+            gross = (exit_fill - pos.entry_fill_price) * pos.current_size * pos.ct_val
         else:
-            gross = (pos.entry_fill_price - exit_fill) * pos.current_size
+            gross = (pos.entry_fill_price - exit_fill) * pos.current_size * pos.ct_val
         self.current_trade.gross_pnl += gross
         self.equity += gross
         
@@ -756,7 +771,8 @@ class BacktestEngine:
                     fill_price=float(pos.entry_fill_price),
                     fill_size=pos.current_size,
                     fill_ts=timestamp,
-                    nominal_value=pos.current_size * pos.entry_fill_price,
+                    # 8-04 P0 fix: nominal_value 必须含 ct_val
+                    nominal_value=pos.current_size * pos.entry_fill_price * pos.ct_val,
                 ))
             self._pending_exit_reason = "liquidation"
             self._finalize_trade(reason="liquidation", exit_ts=timestamp, exit_idx=-1)
